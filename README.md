@@ -98,11 +98,13 @@ qu'une nouvelle génération n'a pas été lancée. Les logs sont écrits dans
 
 ## État actuel
 
-**Phase 1C — Première application desktop utilisable (LithoShape3D 0.1).**
-Assemble les briques des phases précédentes (moteur headless + viewer
-PyVista) dans une vraie `MainWindow` PySide6 : import image, réglage des
-paramètres, génération asynchrone, aperçu 3D interactif, export STL. `core`
-reste strictement indépendant de Qt/PyVista/VTK (vérifié par test
-automatisé). Pas encore de thème définitif, de zones multiples, d'IA, de
-formes non rectangulaires ni d'intégration Bambu Studio — réservé aux
-phases suivantes.
+**Phase 1D — Stabilisation UX du MVP 0.1.** Par-dessus la Phase 1C : thème
+sombre anthracite centralisé (`ui/theme.py`, remplaçable en un seul
+endroit), aperçu 2D qui se redimensionne avec son panneau sans jamais
+recalculer l'image, bannière discrète "Aperçu à régénérer" quand le mesh
+affiché est périmé, raccourcis clavier standards (⌘O/⌘R/⌘E/⌘Q), message de
+génération sans faux pourcentage, paramètres regroupés (Géométrie / Image /
+Affichage) pour une meilleure hiérarchie visuelle. `core` reste strictement
+indépendant de Qt/PyVista/VTK (vérifié par test automatisé). Toujours pas de
+zones multiples, d'IA, de formes non rectangulaires, de couleurs/AMS/3MF ni
+d'intégration Bambu Studio — réservé aux phases suivantes.

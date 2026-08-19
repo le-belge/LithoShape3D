@@ -12,13 +12,14 @@ import logging
 
 import numpy as np
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QAction, QImage, QPixmap
+from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -56,11 +57,13 @@ PRESETS: dict[str, dict[str, float]] = {
 _STATE_MESSAGES = {
     AppState.NO_IMAGE: "Aucune image chargee.",
     AppState.IMAGE_LOADED: "Image chargee. Reglez les parametres puis cliquez sur Generer.",
-    AppState.PARAMS_DIRTY: "Parametres modifies : le mesh affiche est perime, regenerez.",
-    AppState.GENERATING: "Generation en cours...",
+    AppState.PARAMS_DIRTY: "Parametres modifies : le mesh affiche est perime.",
+    AppState.GENERATING: "Generation du mesh...",
     AppState.MESH_READY: "Mesh genere. Vous pouvez l'exporter en STL.",
     AppState.ERROR: "Erreur lors de la generation (voir le journal).",
 }
+
+_STALE_BANNER_TEXT = "Apercu a regenerer"
 
 
 def _array_to_pixmap(array: np.ndarray) -> QPixmap:
@@ -68,6 +71,33 @@ def _array_to_pixmap(array: np.ndarray) -> QPixmap:
     height, width = array_u8.shape
     image = QImage(array_u8.data, width, height, width, QImage.Format.Format_Grayscale8)
     return QPixmap.fromImage(image.copy())
+
+
+class AspectRatioImageLabel(QLabel):
+    """QLabel qui reescalonne son pixmap source au resize, sans jamais
+    recalculer l'image (`set_source_pixmap` seul fait le travail couteux)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._source_pixmap: QPixmap | None = None
+
+    def set_source_pixmap(self, pixmap: QPixmap) -> None:
+        self._source_pixmap = pixmap
+        self._rescale()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._rescale()
+
+    def _rescale(self) -> None:
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            return
+        scaled = self._source_pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
 
 
 class MainWindow(QMainWindow):
@@ -96,14 +126,28 @@ class MainWindow(QMainWindow):
             plotter = QtInteractor(splitter)
         self.plotter = plotter
         viewer_widget = getattr(plotter, "interactor", None)
+
+        viewer_container = QWidget()
+        viewer_layout = QVBoxLayout(viewer_container)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_layout.setSpacing(4)
+
+        self.stale_banner = QLabel(_STALE_BANNER_TEXT)
+        self.stale_banner.setObjectName("staleBanner")
+        self.stale_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stale_banner.setVisible(False)
+        viewer_layout.addWidget(self.stale_banner)
+
         if isinstance(viewer_widget, QWidget):
-            splitter.addWidget(viewer_widget)
+            viewer_layout.addWidget(viewer_widget, 1)
         else:
             # Plotter off-screen (tests) : pas de widget Qt a integrer, la
             # logique du viewer reste testable via `self.scene_viewer`.
             placeholder = QLabel("Viewer 3D (plotter off-screen, tests)")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            splitter.addWidget(placeholder)
+            viewer_layout.addWidget(placeholder, 1)
+
+        splitter.addWidget(viewer_container)
 
         splitter.addWidget(self._build_params_panel())
         splitter.setStretchFactor(0, 0)
@@ -133,15 +177,16 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         panel.setMinimumWidth(220)
         layout = QVBoxLayout(panel)
+        layout.setSpacing(8)
 
         self.open_button = QPushButton("Ouvrir image...")
         self.open_button.clicked.connect(self._choose_image)
         layout.addWidget(self.open_button)
 
-        self.preview_label = QLabel("Aucune image")
+        self.preview_label = AspectRatioImageLabel("Aucune image")
+        self.preview_label.setObjectName("previewLabel")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(200, 200)
-        self.preview_label.setStyleSheet("border: 1px solid #444; background: #1e1e1e; color: #888;")
         layout.addWidget(self.preview_label, 1)
 
         self.filename_label = QLabel("")
@@ -151,88 +196,103 @@ class MainWindow(QMainWindow):
         self.dimensions_label = QLabel("")
         layout.addWidget(self.dimensions_label)
 
-        layout.addStretch(0)
         return panel
 
     def _build_params_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(220)
+        panel.setMinimumWidth(240)
         layout = QVBoxLayout(panel)
-        form = QFormLayout()
+        layout.setSpacing(10)
 
         self.preset_combo = QComboBox()
         self.preset_combo.addItem("Personnalise")
         for name in PRESETS:
             self.preset_combo.addItem(name)
         self.preset_combo.currentTextChanged.connect(self._apply_preset)
-        form.addRow("Preset", self.preset_combo)
+        layout.addWidget(self.preset_combo)
+
+        geometry_group = QGroupBox("Geometrie")
+        geometry_form = QFormLayout(geometry_group)
+        geometry_form.setSpacing(8)
 
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(5.0, 500.0)
         self.width_spin.setSuffix(" mm")
         self.width_spin.setValue(100.0)
-        form.addRow("Largeur", self.width_spin)
+        geometry_form.addRow("Largeur", self.width_spin)
 
         self.height_display = QLabel("- mm")
-        form.addRow("Hauteur (auto)", self.height_display)
+        geometry_form.addRow("Hauteur (ratio verrouille)", self.height_display)
 
         self.min_thickness_spin = QDoubleSpinBox()
         self.min_thickness_spin.setRange(0.1, 10.0)
         self.min_thickness_spin.setSingleStep(0.1)
         self.min_thickness_spin.setSuffix(" mm")
         self.min_thickness_spin.setValue(0.8)
-        form.addRow("Epaisseur min", self.min_thickness_spin)
+        geometry_form.addRow("Epaisseur min", self.min_thickness_spin)
 
         self.max_thickness_spin = QDoubleSpinBox()
         self.max_thickness_spin.setRange(0.2, 15.0)
         self.max_thickness_spin.setSingleStep(0.1)
         self.max_thickness_spin.setSuffix(" mm")
         self.max_thickness_spin.setValue(3.0)
-        form.addRow("Epaisseur max", self.max_thickness_spin)
+        geometry_form.addRow("Epaisseur max", self.max_thickness_spin)
 
         self.resolution_spin = QDoubleSpinBox()
         self.resolution_spin.setRange(0.05, 2.0)
         self.resolution_spin.setSingleStep(0.05)
         self.resolution_spin.setSuffix(" mm/px")
         self.resolution_spin.setValue(0.3)
-        form.addRow("Resolution", self.resolution_spin)
+        geometry_form.addRow("Resolution", self.resolution_spin)
+
+        layout.addWidget(geometry_group)
+
+        image_group = QGroupBox("Image")
+        image_form = QFormLayout(image_group)
+        image_form.setSpacing(8)
 
         self.invert_checkbox = QCheckBox("Inverser (clair = epais)")
-        form.addRow(self.invert_checkbox)
+        image_form.addRow(self.invert_checkbox)
 
         self.contrast_spin = QDoubleSpinBox()
         self.contrast_spin.setRange(0.1, 3.0)
         self.contrast_spin.setSingleStep(0.05)
         self.contrast_spin.setValue(1.0)
-        form.addRow("Contraste", self.contrast_spin)
+        image_form.addRow("Contraste", self.contrast_spin)
 
         self.brightness_spin = QDoubleSpinBox()
         self.brightness_spin.setRange(-0.5, 0.5)
         self.brightness_spin.setSingleStep(0.02)
         self.brightness_spin.setValue(0.0)
-        form.addRow("Luminosite", self.brightness_spin)
+        image_form.addRow("Luminosite", self.brightness_spin)
 
-        layout.addLayout(form)
+        layout.addWidget(image_group)
 
-        layout.addWidget(QLabel("Affichage"))
+        display_group = QGroupBox("Affichage")
+        display_layout = QVBoxLayout(display_group)
+        display_layout.setSpacing(8)
+
         self.display_mode_combo = QComboBox()
         self.display_mode_combo.addItem("Surface", DisplayMode.SURFACE)
         self.display_mode_combo.addItem("Fil de fer", DisplayMode.WIREFRAME)
         self.display_mode_combo.addItem("Surface + aretes", DisplayMode.SURFACE_WITH_EDGES)
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
-        layout.addWidget(self.display_mode_combo)
+        display_layout.addWidget(self.display_mode_combo)
 
         views_layout = QHBoxLayout()
+        views_layout.setSpacing(6)
         self.view_front_button = QPushButton("Face")
         self.view_front_button.clicked.connect(lambda: self.scene_viewer.view_front())
         self.view_iso_button = QPushButton("Iso")
         self.view_iso_button.clicked.connect(lambda: self.scene_viewer.view_isometric())
-        self.view_reset_button = QPushButton("Reset camera")
+        self.view_reset_button = QPushButton("Reset")
+        self.view_reset_button.setToolTip("Reinitialiser la camera")
         self.view_reset_button.clicked.connect(lambda: self.scene_viewer.reset_camera())
         for button in (self.view_front_button, self.view_iso_button, self.view_reset_button):
             views_layout.addWidget(button)
-        layout.addLayout(views_layout)
+        display_layout.addLayout(views_layout)
 
+        layout.addWidget(display_group)
         layout.addStretch(1)
 
         for widget, signal_name in [
@@ -257,6 +317,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(bar)
 
         self.generate_button = QPushButton("Generer")
+        self.generate_button.setObjectName("generateButton")
         self.generate_button.clicked.connect(self._on_generate_clicked)
         layout.addWidget(self.generate_button)
 
@@ -273,16 +334,25 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Fichier")
-        open_action = QAction("Ouvrir image", self)
-        open_action.triggered.connect(self._choose_image)
-        file_menu.addAction(open_action)
 
-        export_action = QAction("Exporter STL", self)
-        export_action.triggered.connect(self._on_export_clicked)
-        file_menu.addAction(export_action)
+        self.open_action = QAction("Ouvrir image", self)
+        self.open_action.setShortcut(QKeySequence.StandardKey.Open)
+        self.open_action.triggered.connect(self._choose_image)
+        file_menu.addAction(self.open_action)
+
+        self.generate_action = QAction("Generer", self)
+        self.generate_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.generate_action.triggered.connect(self._on_generate_clicked)
+        file_menu.addAction(self.generate_action)
+
+        self.export_action = QAction("Exporter STL", self)
+        self.export_action.setShortcut(QKeySequence("Ctrl+E"))
+        self.export_action.triggered.connect(self._on_export_clicked)
+        file_menu.addAction(self.export_action)
 
         file_menu.addSeparator()
         quit_action = QAction("Quitter", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
@@ -302,13 +372,19 @@ class MainWindow(QMainWindow):
     def _set_state(self, state: AppState) -> None:
         self._state = state
         self.statusBar().showMessage(_STATE_MESSAGES[state])
+        self.stale_banner.setVisible(state is AppState.PARAMS_DIRTY)
 
         has_image = self._image_path is not None
         generating = state is AppState.GENERATING
+        can_generate = has_image and not generating
+        can_export = state is AppState.MESH_READY
 
-        self.generate_button.setEnabled(has_image and not generating)
-        self.export_button.setEnabled(state is AppState.MESH_READY)
+        self.generate_button.setEnabled(can_generate)
+        self.generate_action.setEnabled(can_generate)
+        self.export_button.setEnabled(can_export)
+        self.export_action.setEnabled(can_export)
         self.open_button.setEnabled(not generating)
+        self.open_action.setEnabled(not generating)
         self.reset_button.setEnabled(not generating)
         self._params_panel_set_enabled(not generating)
         self.progress_bar.setVisible(generating)
@@ -387,13 +463,7 @@ class MainWindow(QMainWindow):
         if self.invert_checkbox.isChecked():
             array = 1.0 - array
         pixmap = _array_to_pixmap(array)
-        self.preview_label.setPixmap(
-            pixmap.scaled(
-                self.preview_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.preview_label.set_source_pixmap(pixmap)
 
     # ------------------------------------------------------------------ #
     # Parametres / presets
@@ -495,5 +565,5 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "A propos de LithoShape3D",
-            "LithoShape3D 0.1\nImage -> lithophanie -> STL.\nPhase 1C.",
+            "LithoShape3D 0.1\nImage -> lithophanie -> STL.",
         )
