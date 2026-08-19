@@ -17,10 +17,13 @@ au sein d'une même scène composée de plusieurs zones.
   jamais de Qt, PyVista, PyVistaQt ou VTK. Utilisable en headless, en CLI ou
   depuis les tests.
 - `ai/` — segmentation/assistance IA locale (vide pour l'instant).
-- `viewer/` — adaptation d'une `Scene` vers PyVista (aperçu 3D).
-- `ui/` — interface graphique PySide6, ne contient pas de logique métier.
-- `cli.py` — point d'entrée headless.
-- `tests/` — tests du `core`.
+- `viewer/` — conversion mesh -> PyVista et gestion de scène (caméra,
+  éclairage, vues), indépendante de Qt.
+- `ui/` — application PySide6 (`MainWindow`, worker de génération, état,
+  logging). Assemble `core` et `viewer`, ne réimplémente jamais leur logique.
+- `cli.py` — point d'entrée unique : `lithoshape3d` (sans argument) lance
+  l'application graphique, `lithoshape3d generate ...` reste headless.
+- `tests/` — tests du `core`, du `viewer` et de l'`ui`.
 
 ## Installation développement
 
@@ -58,28 +61,48 @@ disque ; la commande échoue explicitement si la validation échoue.
 python scripts/benchmark_mesh.py
 ```
 
-## Viewer 3D (démo, pas encore l'interface finale)
+## Viewer 3D (démo Phase 1B, conservée pour référence)
 
 ```bash
-pip install -e ".[viewer,ui]"
+pip install -e ".[app]"
 python scripts/demo_viewer.py
 ```
 
-Permet de choisir une image, régler quelques paramètres simples et afficher
-immédiatement le mesh produit par le moteur (rotation/zoom/pan, vues
-face/arrière/gauche/droite/dessus/isométrique, modes surface/fil de
-fer/surface+arêtes). Ce n'est qu'une démonstration : l'UI finale (thème,
-zones multiples, etc.) reste à construire dans les phases suivantes.
+Petite démo minimale ayant servi à valider le viewer avant l'application
+complète ci-dessous.
 
-> Remarque macOS : ne pas forcer `QT_QPA_PLATFORM=offscreen` avec cette
-> application — VTK/PyVistaQt plante (segfault) avec ce backend sur macOS.
-> Lancer normalement (fenêtre Qt réelle).
+> Remarque macOS : ne pas forcer `QT_QPA_PLATFORM=offscreen` avec PyVistaQt
+> — VTK plante (segfault) avec ce backend sur macOS. Lancer normalement
+> (fenêtre Qt réelle). Un `pv.Plotter(off_screen=True)` sans Qt fonctionne
+> très bien en revanche (utilisé par tous les tests automatisés).
+
+## LithoShape3D 0.1 — application complète
+
+```bash
+pip install -e ".[app]"
+lithoshape3d
+```
+
+(`lithoshape3d` sans argument lance l'application ; `lithoshape3d generate ...`
+reste disponible pour l'usage headless en CLI.)
+
+Workflow : Ouvrir image → régler les paramètres (largeur, épaisseur
+min/max, résolution, inversion, contraste, luminosité, presets Standard/
+Fine/Draft) → Générer → manipuler le résultat en 3D (rotation/zoom/pan, vues
+Face/Iso/Reset caméra, modes surface/fil de fer/surface+arêtes) → Exporter
+STL. La génération se fait dans un thread séparé (`QThreadPool`), l'interface
+reste réactive pendant ce temps. Si un paramètre est modifié après une
+génération, le mesh affiché est marqué périmé et l'export est désactivé tant
+qu'une nouvelle génération n'a pas été lancée. Les logs sont écrits dans
+`~/Library/Logs/LithoShape3D/lithoshape3d.log`.
 
 ## État actuel
 
-**Phase 1B — Viewer 3D PyVista.** En plus de la chaîne headless de la Phase
-1A, un viewer 3D (`src/lithoshape3d/viewer/`) affiche directement les meshes
-produits par le core, sans passer par un fichier STL temporaire. `core` reste
-strictement indépendant de Qt/PyVista/VTK (vérifié par test automatisé).
-L'interface graphique finale (thème, panneaux, zones multiples) reste à
-construire dans les phases suivantes.
+**Phase 1C — Première application desktop utilisable (LithoShape3D 0.1).**
+Assemble les briques des phases précédentes (moteur headless + viewer
+PyVista) dans une vraie `MainWindow` PySide6 : import image, réglage des
+paramètres, génération asynchrone, aperçu 3D interactif, export STL. `core`
+reste strictement indépendant de Qt/PyVista/VTK (vérifié par test
+automatisé). Pas encore de thème définitif, de zones multiples, d'IA, de
+formes non rectangulaires ni d'intégration Bambu Studio — réservé aux
+phases suivantes.

@@ -80,6 +80,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_launch_app() -> int:
+    from lithoshape3d.ui.app import run_app
+
+    return run_app()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     try:
@@ -90,8 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "generate":
         return _cmd_generate(args)
 
-    parser.print_help()
-    return 0
+    return _cmd_launch_app()
 
 
 if __name__ == "__main__":
