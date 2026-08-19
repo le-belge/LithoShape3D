@@ -9,11 +9,13 @@ est cree automatiquement.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -22,6 +24,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -41,7 +45,11 @@ from lithoshape3d.core.image.preprocessing import (
     resize_array,
     to_grayscale_array,
 )
-from lithoshape3d.core.scene.models import GeometryParameters
+from lithoshape3d.core.scene.mask_io import load_zone_mask
+from lithoshape3d.core.scene.models import GeometryParameters, Project, Zone
+from lithoshape3d.core.scene.project_io import load_project_bundle, save_project_bundle
+from lithoshape3d.ui.mask_editor_dialog import MaskEditorDialog
+from lithoshape3d.ui.overlay import render_overlay, zone_color
 from lithoshape3d.ui.state import AppState
 from lithoshape3d.ui.worker import GenerationWorker
 from lithoshape3d.viewer.scene_viewer import DisplayMode, SceneViewer
@@ -105,6 +113,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("LithoShape3D 0.1")
         self.resize(1300, 800)
+
+        self._project: Project = Project()
+        self._project_bundle_dir: Path | None = None
+        self._zone_masks: dict[str, np.ndarray] = {}
 
         self._image_path: str | None = None
         self._image_width_px = 0
@@ -195,6 +207,33 @@ class MainWindow(QMainWindow):
 
         self.dimensions_label = QLabel("")
         layout.addWidget(self.dimensions_label)
+
+        zones_group = QGroupBox("Zones")
+        zones_layout = QVBoxLayout(zones_group)
+        zones_layout.setSpacing(6)
+
+        self.zones_list = QListWidget()
+        self.zones_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.zones_list.itemSelectionChanged.connect(self._on_zone_selection_changed)
+        self.zones_list.itemChanged.connect(self._on_zone_item_changed)
+        self.zones_list.model().rowsMoved.connect(self._on_zones_reordered)
+        zones_layout.addWidget(self.zones_list)
+
+        zones_buttons = QHBoxLayout()
+        self.new_zone_button = QPushButton("+ Zone")
+        self.new_zone_button.clicked.connect(self._on_new_zone_clicked)
+        zones_buttons.addWidget(self.new_zone_button)
+
+        self.delete_zone_button = QPushButton("Supprimer")
+        self.delete_zone_button.clicked.connect(self._on_delete_zone_clicked)
+        zones_buttons.addWidget(self.delete_zone_button)
+        zones_layout.addLayout(zones_buttons)
+
+        self.edit_mask_button = QPushButton("Editer le masque...")
+        self.edit_mask_button.clicked.connect(self._on_edit_mask_clicked)
+        zones_layout.addWidget(self.edit_mask_button)
+
+        layout.addWidget(zones_group)
 
         return panel
 
@@ -335,6 +374,27 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Fichier")
 
+        new_project_action = QAction("Nouveau projet", self)
+        new_project_action.setShortcut(QKeySequence.StandardKey.New)
+        new_project_action.triggered.connect(self._on_new_project)
+        file_menu.addAction(new_project_action)
+
+        open_project_action = QAction("Ouvrir projet...", self)
+        open_project_action.triggered.connect(self._on_open_project)
+        file_menu.addAction(open_project_action)
+
+        save_project_action = QAction("Enregistrer", self)
+        save_project_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_project_action.triggered.connect(self._on_save_project)
+        file_menu.addAction(save_project_action)
+
+        save_project_as_action = QAction("Enregistrer sous...", self)
+        save_project_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        save_project_as_action.triggered.connect(self._on_save_project_as)
+        file_menu.addAction(save_project_as_action)
+
+        file_menu.addSeparator()
+
         self.open_action = QAction("Ouvrir image", self)
         self.open_action.setShortcut(QKeySequence.StandardKey.Open)
         self.open_action.triggered.connect(self._choose_image)
@@ -389,6 +449,11 @@ class MainWindow(QMainWindow):
         self._params_panel_set_enabled(not generating)
         self.progress_bar.setVisible(generating)
 
+        self.new_zone_button.setEnabled(has_image and not generating)
+        self.delete_zone_button.setEnabled(not generating and self._active_zone() is not None)
+        self.edit_mask_button.setEnabled(not generating and self._active_zone() is not None)
+        self.zones_list.setEnabled(not generating)
+
     def _params_panel_set_enabled(self, enabled: bool) -> None:
         for widget in (
             self.width_spin,
@@ -403,6 +468,10 @@ class MainWindow(QMainWindow):
             widget.setEnabled(enabled)
 
     def _on_param_changed(self, *_args) -> None:
+        zone = self._active_zone()
+        if zone is not None and self._image_path:
+            zone.geometry_params = self._current_geometry_parameters()
+
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
         elif self._state is AppState.ERROR:
@@ -431,12 +500,14 @@ class MainWindow(QMainWindow):
         self._image_width_px = width_px
         self._image_height_px = height_px
         self._current_mesh = None
+        self._project.scene.source_image_path = path
 
         self.filename_label.setText(path.rsplit("/", 1)[-1])
         self.dimensions_label.setText(f"{width_px} x {height_px} px")
 
+        self._ensure_default_zone()
+        self._refresh_zones_list()
         self._update_height_display()
-        self._update_source_preview()
         self._set_state(AppState.IMAGE_LOADED)
 
     def _update_height_display(self) -> None:
@@ -462,8 +533,150 @@ class MainWindow(QMainWindow):
         array = normalize(array)
         if self.invert_checkbox.isChecked():
             array = 1.0 - array
-        pixmap = _array_to_pixmap(array)
+
+        zone = self._active_zone()
+        if zone is not None:
+            mask_preview = self._zone_mask_at_shape(zone, array.shape)
+            index = self._project.scene.zones.index(zone)
+            pixmap = render_overlay(array, mask_preview, zone_color(index), alpha=0.4)
+        else:
+            pixmap = _array_to_pixmap(array)
         self.preview_label.set_source_pixmap(pixmap)
+
+    # ------------------------------------------------------------------ #
+    # Zones
+    # ------------------------------------------------------------------ #
+    def _active_zone(self) -> Zone | None:
+        zone_id = self._project.scene.active_zone_id
+        return next((z for z in self._project.scene.zones if z.id == zone_id), None)
+
+    def _ensure_default_zone(self) -> None:
+        """Zone "Lithophanie" auto-creee uniquement si aucune zone n'existe
+        deja (nouveau workflow) -- un projet rouvert n'est jamais ecrase."""
+        if self._project.scene.zones:
+            return
+        zone = Zone(name="Lithophanie", geometry_params=self._current_geometry_parameters())
+        self._project.scene.zones.append(zone)
+        self._project.scene.active_zone_id = zone.id
+
+    def _zone_mask_at_shape(self, zone: Zone, shape: tuple[int, int]) -> np.ndarray:
+        """Masque float32 [0,1] de `zone` redimensionne a `shape`, sans
+        jamais modifier le masque source stocke."""
+        mask = self._zone_masks.get(zone.id)
+        if mask is None:
+            if zone.mask_path and self._project_bundle_dir is not None:
+                mask = load_zone_mask(self._project_bundle_dir, zone, shape=shape)
+            else:
+                mask = np.ones(shape, dtype=np.float32)
+        if mask.shape != shape:
+            mask = resize_array(mask, width_px=shape[1], height_px=shape[0])
+        return mask
+
+    def _active_zone_mask_for_generation(self, zone: Zone) -> np.ndarray | None:
+        """None si la zone n'a jamais ete touchee (comportement historique,
+        aucune verification necessaire -- pas de fichier, pas de masque)."""
+        if zone.id in self._zone_masks:
+            return self._zone_masks[zone.id]
+        if zone.mask_path is None or self._project_bundle_dir is None:
+            return None
+        width_px, height_px = image_size(self._image_path)
+        return load_zone_mask(self._project_bundle_dir, zone, shape=(height_px, width_px))
+
+    def _refresh_zones_list(self) -> None:
+        self.zones_list.blockSignals(True)
+        self.zones_list.clear()
+        for zone in self._project.scene.zones:
+            item = QListWidgetItem(zone.name)
+            item.setFlags(
+                item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(Qt.CheckState.Checked if zone.visible else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, zone.id)
+            self.zones_list.addItem(item)
+            if zone.id == self._project.scene.active_zone_id:
+                self.zones_list.setCurrentItem(item)
+        self.zones_list.blockSignals(False)
+
+        self._load_zone_params_into_panel(self._active_zone())
+        self._update_source_preview()
+        self._set_state(self._state)  # rafraichit l'activation des boutons zones
+
+    def _load_zone_params_into_panel(self, zone: Zone | None) -> None:
+        if zone is None:
+            return
+        params = zone.geometry_params
+        self.width_spin.setValue(params.width_mm)
+        self.min_thickness_spin.setValue(params.min_thickness_mm)
+        self.max_thickness_spin.setValue(params.max_thickness_mm)
+        self.resolution_spin.setValue(params.resolution)
+        self.invert_checkbox.setChecked(params.invert)
+        self._update_height_display()
+
+    def _on_zone_selection_changed(self) -> None:
+        item = self.zones_list.currentItem()
+        if item is None:
+            return
+        self._project.scene.active_zone_id = item.data(Qt.ItemDataRole.UserRole)
+        self._load_zone_params_into_panel(self._active_zone())
+        self._update_source_preview()
+        self._set_state(self._state)
+
+    def _on_zone_item_changed(self, item: QListWidgetItem) -> None:
+        zone_id = item.data(Qt.ItemDataRole.UserRole)
+        zone = next((z for z in self._project.scene.zones if z.id == zone_id), None)
+        if zone is None:
+            return
+        zone.name = item.text()
+        zone.visible = item.checkState() == Qt.CheckState.Checked
+        self._update_source_preview()
+
+    def _on_zones_reordered(self, *_args) -> None:
+        ordered_ids = [
+            self.zones_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.zones_list.count())
+        ]
+        zones_by_id = {zone.id: zone for zone in self._project.scene.zones}
+        self._project.scene.zones = [zones_by_id[zid] for zid in ordered_ids if zid in zones_by_id]
+
+    def _on_new_zone_clicked(self) -> None:
+        if not self._image_path:
+            return
+        index = len(self._project.scene.zones) + 1
+        zone = Zone(name=f"Zone {index}", geometry_params=self._current_geometry_parameters())
+        self._project.scene.zones.append(zone)
+        self._project.scene.active_zone_id = zone.id
+        self._refresh_zones_list()
+
+    def _on_delete_zone_clicked(self) -> None:
+        zone = self._active_zone()
+        if zone is None:
+            return
+        self._project.scene.zones.remove(zone)
+        self._zone_masks.pop(zone.id, None)
+        remaining = self._project.scene.zones
+        self._project.scene.active_zone_id = remaining[0].id if remaining else None
+        self._refresh_zones_list()
+
+    def _on_edit_mask_clicked(self) -> None:
+        zone = self._active_zone()
+        if zone is None or not self._image_path:
+            return
+
+        image = load_image(self._image_path)
+        base_array = to_grayscale_array(image)  # resolution native, jamais modifiee
+
+        mask = self._zone_masks.get(zone.id)
+        if mask is None:
+            if zone.mask_path and self._project_bundle_dir is not None:
+                mask = load_zone_mask(self._project_bundle_dir, zone, shape=base_array.shape)
+            else:
+                mask = np.ones(base_array.shape, dtype=np.float32)
+
+        index = self._project.scene.zones.index(zone)
+        dialog = MaskEditorDialog(zone.name, base_array, mask, zone_color(index), parent=self)
+        if dialog.exec():
+            self._zone_masks[zone.id] = dialog.resulting_mask()
+            self._update_source_preview()
 
     # ------------------------------------------------------------------ #
     # Parametres / presets
@@ -506,12 +719,15 @@ class MainWindow(QMainWindow):
         if not self._image_path:
             return
 
+        zone = self._active_zone()
         params = self._current_geometry_parameters()
+        mask = self._active_zone_mask_for_generation(zone) if zone is not None else None
         worker = GenerationWorker(
             self._image_path,
             params,
             brightness=self.brightness_spin.value(),
             contrast=self.contrast_spin.value(),
+            mask=mask,
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)
@@ -557,6 +773,86 @@ class MainWindow(QMainWindow):
         logger.info("STL exporte : %s", path)
         self.statusBar().showMessage(f"Export reussi : {path}", 8000)
         QMessageBox.information(self, "LithoShape3D", f"STL exporte avec succes :\n{path}")
+
+    # ------------------------------------------------------------------ #
+    # Projet
+    # ------------------------------------------------------------------ #
+    def _on_new_project(self) -> None:
+        self._project = Project()
+        self._project_bundle_dir = None
+        self._zone_masks = {}
+        self._image_path = None
+        self._image_width_px = 0
+        self._image_height_px = 0
+        self._current_mesh = None
+
+        self.filename_label.setText("")
+        self.dimensions_label.setText("")
+        self.preview_label.set_source_pixmap(QPixmap())
+        self._refresh_zones_list()
+        self._set_state(AppState.NO_IMAGE)
+
+    def _on_open_project(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "Ouvrir un projet LithoShape3D")
+        if not directory:
+            return
+
+        try:
+            project = load_project_bundle(directory)
+        except (OSError, ValueError, KeyError) as exc:
+            logger.exception("Impossible d'ouvrir le projet")
+            QMessageBox.critical(self, "LithoShape3D", f"Impossible d'ouvrir le projet :\n{exc}")
+            return
+
+        self._project = project
+        self._project_bundle_dir = Path(directory)
+        self._zone_masks = {}
+        self._current_mesh = None
+
+        if project.scene.source_image_path:
+            self._image_path = str(self._project_bundle_dir / project.scene.source_image_path)
+            try:
+                self._image_width_px, self._image_height_px = image_size(self._image_path)
+            except (OSError, ValueError):
+                self._image_width_px = self._image_height_px = 0
+            self.filename_label.setText(Path(self._image_path).name)
+            self.dimensions_label.setText(f"{self._image_width_px} x {self._image_height_px} px")
+        else:
+            self._image_path = None
+            self.filename_label.setText("")
+            self.dimensions_label.setText("")
+
+        self._refresh_zones_list()
+        self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
+
+    def _on_save_project(self) -> None:
+        if self._project_bundle_dir is None:
+            self._on_save_project_as()
+            return
+        self._save_project_to(self._project_bundle_dir)
+
+    def _on_save_project_as(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Enregistrer le projet", "MonProjet.l3dproj", "Projet LithoShape3D (*.l3dproj)"
+        )
+        if not path:
+            return
+        self._save_project_to(Path(path))
+
+    def _save_project_to(self, bundle_dir: Path) -> None:
+        try:
+            save_project_bundle(self._project, bundle_dir, dirty_masks=self._zone_masks)
+        except OSError as exc:
+            logger.exception("Echec de l'enregistrement du projet")
+            QMessageBox.critical(self, "LithoShape3D", f"Echec de l'enregistrement :\n{exc}")
+            return
+
+        self._project_bundle_dir = Path(bundle_dir)
+        self._zone_masks.clear()
+        if self._project.scene.source_image_path:
+            self._image_path = str(self._project_bundle_dir / self._project.scene.source_image_path)
+
+        self.statusBar().showMessage(f"Projet enregistre : {bundle_dir}", 8000)
 
     # ------------------------------------------------------------------ #
     # Divers

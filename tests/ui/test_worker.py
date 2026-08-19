@@ -1,3 +1,5 @@
+import numpy as np
+
 from lithoshape3d.core.scene.models import GeometryParameters
 from lithoshape3d.ui.worker import GenerationWorker
 from tests.fixtures.synthetic_images import make_uniform_image
@@ -45,6 +47,46 @@ def test_worker_emits_failed_for_invalid_params(tmp_path):
     assert len(errors) == 1
     assert "thickness" in errors[0] or "superieur" in errors[0]
     assert finished == [True]
+
+
+def test_worker_rejects_partial_mask_with_friendly_message(tmp_path):
+    image_path = make_uniform_image(tmp_path / "mid.png", value=128, width=20, height=20)
+    params = GeometryParameters(width_mm=30.0, height_mm=20.0, resolution=2.0)
+    rows, cols = 10, 15
+    partial_mask = np.ones((rows, cols), dtype=np.float32)
+    partial_mask[0, 0] = 0.0  # masque partiel : pas Phase 2B
+    worker = GenerationWorker(str(image_path), params, mask=partial_mask)
+
+    errors = []
+    results = []
+    worker.signals.failed.connect(errors.append)
+    worker.signals.succeeded.connect(results.append)
+
+    worker.run()
+
+    assert not results
+    assert len(errors) == 1
+    assert "Phase 2B" in errors[0]
+    assert "traceback" not in errors[0].lower()
+
+
+def test_worker_accepts_fully_active_mask_like_no_mask(tmp_path):
+    image_path = make_uniform_image(tmp_path / "mid.png", value=128, width=20, height=20)
+    params = GeometryParameters(width_mm=30.0, height_mm=20.0, resolution=2.0)
+    worker_no_mask = GenerationWorker(str(image_path), params)
+    worker_full_mask = GenerationWorker(
+        str(image_path), params, mask=np.ones((10, 15), dtype=np.float32)
+    )
+
+    results_a, results_b = [], []
+    worker_no_mask.signals.succeeded.connect(results_a.append)
+    worker_full_mask.signals.succeeded.connect(results_b.append)
+
+    worker_no_mask.run()
+    worker_full_mask.run()
+
+    assert len(results_a) == 1
+    assert len(results_b) == 1
 
 
 def test_worker_emits_failed_for_missing_image():

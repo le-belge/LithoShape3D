@@ -96,15 +96,33 @@ génération, le mesh affiché est marqué périmé et l'export est désactivé 
 qu'une nouvelle génération n'a pas été lancée. Les logs sont écrits dans
 `~/Library/Logs/LithoShape3D/lithoshape3d.log`.
 
+## Zones et masques (Phase 2A)
+
+Une image peut désormais être découpée en plusieurs zones indépendantes
+(panneau "Zones" sous l'aperçu source) : création/suppression/renommage
+inline/visibilité/réordonnancement par glisser-déposer. Chaque zone possède
+son propre masque (peint via "Éditer le masque..." — pinceau, gomme, taille,
+remplir, effacer, inverser, undo/redo ⌘Z/⇧⌘Z) et ses propres paramètres
+géométriques. La zone active est mise en surbrillance dans l'aperçu 2D
+(overlay coloré, une teinte par zone, l'image source n'est jamais modifiée).
+
+Ouvrir une image crée automatiquement une zone "Lithophanie" à masque plein
+(comportement historique préservé). La génération/le viewer 3D continuent de
+cibler la zone active ; une zone à masque partiel est refusée proprement
+(fusion multi-zones réelle = Phase 2B, pas encore implémentée).
+
+Menu Fichier : Nouveau projet / Ouvrir projet.../ Enregistrer / Enregistrer
+sous... — un projet est un bundle-dossier `MonProjet.l3dproj/` (image copiée
+dans `source/`, masques dans `masks/`, `project.json`), entièrement
+déplaçable (aucun chemin absolu enregistré).
+
 ## État actuel
 
-**Phase 1D — Stabilisation UX du MVP 0.1.** Par-dessus la Phase 1C : thème
-sombre anthracite centralisé (`ui/theme.py`, remplaçable en un seul
-endroit), aperçu 2D qui se redimensionne avec son panneau sans jamais
-recalculer l'image, bannière discrète "Aperçu à régénérer" quand le mesh
-affiché est périmé, raccourcis clavier standards (⌘O/⌘R/⌘E/⌘Q), message de
-génération sans faux pourcentage, paramètres regroupés (Géométrie / Image /
-Affichage) pour une meilleure hiérarchie visuelle. `core` reste strictement
+**Phase 2A — Zones & masques manuels.** Premier jalon réel vers LithoFusion
+3D : modèle multi-zones (`Scene.zones`, masques `float32 [0,1]`), éditeur de
+masque avec undo/redo borné, bundle projet `.l3dproj` portable, migration
+automatique des anciens projets `format_version=1`. `core` reste strictement
 indépendant de Qt/PyVista/VTK (vérifié par test automatisé). Toujours pas de
-zones multiples, d'IA, de formes non rectangulaires, de couleurs/AMS/3MF ni
-d'intégration Bambu Studio — réservé aux phases suivantes.
+segmentation IA, de fusion géométrique multi-zones, de formes non
+rectangulaires, de couleurs/AMS/3MF ni d'intégration Bambu Studio — réservé
+aux phases suivantes.

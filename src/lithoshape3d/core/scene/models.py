@@ -49,7 +49,11 @@ class GeometryParameters:
 class Zone:
     id: str = field(default_factory=lambda: str(uuid4()))
     name: str = "zone"
+    visible: bool = True
     source_image_path: str | None = None
+    """Override rare et optionnel : une zone peut un jour referencer sa
+    propre source (logo, texte rasterise, texture independante). Pour le
+    workflow classique, reste a None et la zone utilise Scene.source_image_path."""
     mask_path: str | None = None
     geometry_params: GeometryParameters = field(
         default_factory=lambda: GeometryParameters(width_mm=100.0, height_mm=100.0)
@@ -63,10 +67,13 @@ class Zone:
 @dataclass
 class Scene:
     zones: list[Zone] = field(default_factory=list)
+    source_image_path: str | None = None
+    """Image partagee par le workflow classique 1 image -> plusieurs zones."""
+    active_zone_id: str | None = None
 
 
 @dataclass
 class Project:
     name: str = "untitled"
     scene: Scene = field(default_factory=Scene)
-    format_version: int = 1
+    format_version: int = 2

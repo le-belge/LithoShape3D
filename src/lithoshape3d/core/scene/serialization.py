@@ -7,6 +7,7 @@ vers un fichier a part (cache local), pas vers des donnees inline.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from lithoshape3d.core.scene.models import (
     Zone,
 )
 
-CURRENT_FORMAT_VERSION = 1
+CURRENT_FORMAT_VERSION = 2
 
 
 def _transform_to_dict(transform: Transform) -> dict[str, Any]:
@@ -86,6 +87,7 @@ def _zone_to_dict(zone: Zone) -> dict[str, Any]:
     return {
         "id": zone.id,
         "name": zone.name,
+        "visible": zone.visible,
         "source_image_path": zone.source_image_path,
         "mask_path": zone.mask_path,
         "geometry_params": _geometry_params_to_dict(zone.geometry_params),
@@ -100,6 +102,7 @@ def _zone_from_dict(data: dict[str, Any]) -> Zone:
     return Zone(
         id=data.get("id", None) or Zone().id,
         name=data.get("name", "zone"),
+        visible=data.get("visible", True),
         source_image_path=data.get("source_image_path"),
         mask_path=data.get("mask_path"),
         geometry_params=_geometry_params_from_dict(data["geometry_params"]),
@@ -116,8 +119,46 @@ def project_to_dict(project: Project) -> dict[str, Any]:
         "name": project.name,
         "scene": {
             "zones": [_zone_to_dict(zone) for zone in project.scene.zones],
+            "source_image_path": project.scene.source_image_path,
+            "active_zone_id": project.scene.active_zone_id,
         },
     }
+
+
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """Migration defensive : ne suppose PAS qu'un projet v1 n'a qu'une zone.
+
+    1. cherche la premiere zone avec un source_image_path valide (non vide) ;
+    2. la promeut en Scene.source_image_path ;
+    3. conserve toutes les zones ;
+    4. met a None le source_image_path d'une zone seulement s'il correspond
+       exactement a la source commune promue (sinon c'est une vraie source
+       differente, conservee comme override) ;
+    5. ajoute `visible=True` a chaque zone (champ absent en v1) ;
+    6. fixe active_zone_id sur la premiere zone si des zones existent.
+    """
+    zones_data = data.get("scene", {}).get("zones", [])
+
+    shared_source = next(
+        (z.get("source_image_path") for z in zones_data if z.get("source_image_path")),
+        None,
+    )
+
+    for zone_data in zones_data:
+        zone_data.setdefault("visible", True)
+        if shared_source is not None and zone_data.get("source_image_path") == shared_source:
+            zone_data["source_image_path"] = None
+
+    data.setdefault("scene", {})
+    data["scene"]["source_image_path"] = shared_source
+    data["scene"]["active_zone_id"] = zones_data[0]["id"] if zones_data else None
+    data["format_version"] = 2
+    return data
+
+
+_MIGRATIONS = {
+    1: _migrate_v1_to_v2,
+}
 
 
 def project_from_dict(data: dict[str, Any]) -> Project:
@@ -127,13 +168,25 @@ def project_from_dict(data: dict[str, Any]) -> Project:
             f"format_version {format_version} non supporte "
             f"(version maximale geree : {CURRENT_FORMAT_VERSION})"
         )
-    # Point d'extension : les migrations de format_version 1 -> 2, etc.
-    # viendront se brancher ici lorsque le format evoluera.
+
+    data = copy.deepcopy(data)  # les migrations mutent leur argument : ne jamais alterer l'appelant
+    while format_version in _MIGRATIONS:
+        data = _MIGRATIONS[format_version](data)
+        format_version = data["format_version"]
 
     zones = [_zone_from_dict(zone_data) for zone_data in data["scene"]["zones"]]
+    zone_ids = {zone.id for zone in zones}
+    active_zone_id = data["scene"].get("active_zone_id")
+    if active_zone_id not in zone_ids:
+        active_zone_id = zones[0].id if zones else None
+
     return Project(
         name=data.get("name", "untitled"),
-        scene=Scene(zones=zones),
+        scene=Scene(
+            zones=zones,
+            source_image_path=data["scene"].get("source_image_path"),
+            active_zone_id=active_zone_id,
+        ),
         format_version=format_version,
     )
 

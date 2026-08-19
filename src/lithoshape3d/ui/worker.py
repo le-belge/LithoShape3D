@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
 from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
+from lithoshape3d.core.image.preprocessing import resize_array
 from lithoshape3d.core.scene.models import GeometryParameters
 from lithoshape3d.core.validation.mesh_checks import validate_mesh
 
@@ -33,12 +35,14 @@ class GenerationWorker(QRunnable):
         params: GeometryParameters,
         brightness: float = 0.0,
         contrast: float = 1.0,
+        mask: np.ndarray | None = None,
     ) -> None:
         super().__init__()
         self.image_path = image_path
         self.params = params
         self.brightness = brightness
         self.contrast = contrast
+        self.mask = mask
         self.signals = GenerationSignals()
 
     def run(self) -> None:
@@ -46,8 +50,19 @@ class GenerationWorker(QRunnable):
             heightmap = heightmap_from_image_path(
                 self.image_path, self.params, brightness=self.brightness, contrast=self.contrast
             )
-            mesh = build_slab_mesh(heightmap, mask=None, params=self.params)
+            mask = self.mask
+            if mask is not None and mask.shape != heightmap.shape:
+                mask = resize_array(mask, width_px=heightmap.shape[1], height_px=heightmap.shape[0])
+            mesh = build_slab_mesh(heightmap, mask=mask, params=self.params)
             result = validate_mesh(mesh)
+        except NotImplementedError as exc:
+            logger.info("Generation refusee (masque partiel non supporte) : %s", exc)
+            self.signals.failed.emit(
+                "Cette zone utilise un masque partiel : la generation multi-zone "
+                "n'est pas encore disponible (Phase 2B a venir)."
+            )
+            self.signals.finished.emit()
+            return
         except (ValueError, OSError, RuntimeError) as exc:
             logger.exception("Echec de generation de la lithophanie")
             self.signals.failed.emit(str(exc))
