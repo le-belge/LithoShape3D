@@ -42,9 +42,27 @@ pip install -e .
 pytest
 ```
 
+## Utilisation (CLI headless, sans interface graphique)
+
+```bash
+lithoshape3d generate photo.png sortie.stl --width 100 --min-thickness 0.8 --max-thickness 3.0
+```
+
+`--height` est optionnel : déduite du ratio de l'image si omise. Le mesh est
+validé (fermé, manifold, sans triangle dégénéré) avant d'être écrit sur
+disque ; la commande échoue explicitement si la validation échoue.
+
+## Benchmark
+
+```bash
+python scripts/benchmark_mesh.py
+```
+
 ## État actuel
 
-**Phase 0 — Squelette du projet.** Le modèle de données (`Project` / `Scene`
-/ `Zone`) et la sérialisation de projet sont en place. Aucun moteur de
-génération (heightmap, mesh, export STL réel) n'est encore implémenté — c'est
-l'objet de la Phase 1 (`IMAGE → HEIGHTMAP → MESH MANIFOLD → APERÇU 3D → STL`).
+**Phase 1A — Moteur de lithophanie headless.** Chaîne fonctionnelle complète
+`IMAGE → PRÉTRAITEMENT → HEIGHTMAP → MESH MANIFOLD → STL`, testée et validée
+(watertight, winding cohérent, volume positif, compatible `manifold3d`),
+utilisable en CLI sans aucune interface graphique. Le viewer 3D (PyVista) et
+l'interface PySide6 n'ont volontairement pas encore été intégrés — c'est
+l'objet de la Phase 1B.
