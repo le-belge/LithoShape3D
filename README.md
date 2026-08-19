@@ -58,11 +58,28 @@ disque ; la commande échoue explicitement si la validation échoue.
 python scripts/benchmark_mesh.py
 ```
 
+## Viewer 3D (démo, pas encore l'interface finale)
+
+```bash
+pip install -e ".[viewer,ui]"
+python scripts/demo_viewer.py
+```
+
+Permet de choisir une image, régler quelques paramètres simples et afficher
+immédiatement le mesh produit par le moteur (rotation/zoom/pan, vues
+face/arrière/gauche/droite/dessus/isométrique, modes surface/fil de
+fer/surface+arêtes). Ce n'est qu'une démonstration : l'UI finale (thème,
+zones multiples, etc.) reste à construire dans les phases suivantes.
+
+> Remarque macOS : ne pas forcer `QT_QPA_PLATFORM=offscreen` avec cette
+> application — VTK/PyVistaQt plante (segfault) avec ce backend sur macOS.
+> Lancer normalement (fenêtre Qt réelle).
+
 ## État actuel
 
-**Phase 1A — Moteur de lithophanie headless.** Chaîne fonctionnelle complète
-`IMAGE → PRÉTRAITEMENT → HEIGHTMAP → MESH MANIFOLD → STL`, testée et validée
-(watertight, winding cohérent, volume positif, compatible `manifold3d`),
-utilisable en CLI sans aucune interface graphique. Le viewer 3D (PyVista) et
-l'interface PySide6 n'ont volontairement pas encore été intégrés — c'est
-l'objet de la Phase 1B.
+**Phase 1B — Viewer 3D PyVista.** En plus de la chaîne headless de la Phase
+1A, un viewer 3D (`src/lithoshape3d/viewer/`) affiche directement les meshes
+produits par le core, sans passer par un fichier STL temporaire. `core` reste
+strictement indépendant de Qt/PyVista/VTK (vérifié par test automatisé).
+L'interface graphique finale (thème, panneaux, zones multiples) reste à
+construire dans les phases suivantes.
