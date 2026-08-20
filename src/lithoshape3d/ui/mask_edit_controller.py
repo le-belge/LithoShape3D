@@ -95,6 +95,14 @@ class MaskEditController:
     def invert(self) -> None:
         self._apply_whole_mask(1.0 - self.mask)
 
+    def apply_external_mask(self, mask: np.ndarray) -> None:
+        """Applique un masque externe (ex. proposition de selection
+        intelligente) comme UNE seule entree undo -- pinceau/gomme restent
+        utilisables normalement ensuite pour corriger le resultat."""
+        if mask.shape != self.mask.shape:
+            raise ValueError("le masque externe doit avoir la meme forme que le masque courant")
+        self._apply_whole_mask(mask)
+
     def _apply_whole_mask(self, new_mask: np.ndarray) -> None:
         before = self.mask.copy()
         self.mask = new_mask.astype(np.float32)

@@ -1,7 +1,7 @@
 def test_package_imports():
     import lithoshape3d
 
-    assert lithoshape3d.__version__ == "0.1.0"
+    assert lithoshape3d.__version__ == "0.2.0"
 
 
 def test_cli_version(capsys):

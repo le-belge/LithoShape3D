@@ -1,4 +1,4 @@
-"""Fenetre principale de LithoShape3D 0.1.
+"""Fenetre principale de LithoShape3D.
 
 Assemble les briques existantes (core Phase 1A, viewer Phase 1B) sans les
 reecrire. `plotter` est injectable (comme `SceneViewer`) : en tests on passe
@@ -82,6 +82,19 @@ _STATE_MESSAGES = {
 _STALE_BANNER_TEXT = "Apercu a regenerer"
 
 
+def _create_segmentation_backend():
+    """None uniquement si la dependance IA (coremltools) est absente. Si
+    presente mais que le modele n'est pas encore telecharge, on renvoie
+    quand meme une instance : `MaskEditorDialog` proposera le telechargement
+    a la demande (voir mask_editor_dialog._offer_model_download)."""
+    try:
+        from lithoshape3d.ai.segmentation.sam2_coreml_backend import Sam2CoreMLBackend
+    except ImportError:
+        logger.info("Selection intelligente indisponible : dependance IA non installee.")
+        return None
+    return Sam2CoreMLBackend()
+
+
 def _array_to_pixmap(array: np.ndarray) -> QPixmap:
     array_u8 = np.ascontiguousarray((np.clip(array, 0.0, 1.0) * 255).astype(np.uint8))
     height, width = array_u8.shape
@@ -119,7 +132,9 @@ class AspectRatioImageLabel(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self, plotter=None) -> None:
         super().__init__()
-        self.setWindowTitle("LithoShape3D 0.1")
+        from lithoshape3d import __version__
+
+        self.setWindowTitle(f"LithoShape3D {__version__}")
         self.resize(1300, 800)
 
         self._project: Project = Project()
@@ -132,6 +147,7 @@ class MainWindow(QMainWindow):
         self._current_mesh = None
         self._state = AppState.NO_IMAGE
         self._thread_pool = QThreadPool.globalInstance()
+        self._segmentation_backend = _create_segmentation_backend()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -258,23 +274,25 @@ class MainWindow(QMainWindow):
         self.preset_combo.currentTextChanged.connect(self._apply_preset)
         layout.addWidget(self.preset_combo)
 
-        role_group = QGroupBox("Role de la zone")
-        role_form = QFormLayout(role_group)
-        role_form.setSpacing(8)
-
+        relief_group = QGroupBox("Relief")
+        relief_form = QFormLayout(relief_group)
+        relief_form.setSpacing(8)
         self.relief_mode_combo = QComboBox()
         self.relief_mode_combo.addItem("Lithophanie", ReliefMode.LITHOPHANE)
         self.relief_mode_combo.addItem("Relief (amplitude)", ReliefMode.RELIEF)
         self.relief_mode_combo.addItem("Solide (hauteur constante)", ReliefMode.SOLID)
-        role_form.addRow("Relief", self.relief_mode_combo)
+        relief_form.addRow("Type", self.relief_mode_combo)
+        layout.addWidget(relief_group)
 
+        composition_group = QGroupBox("Composition")
+        composition_form = QFormLayout(composition_group)
+        composition_form.setSpacing(8)
         self.composition_mode_combo = QComboBox()
         self.composition_mode_combo.addItem("Base", CompositionMode.BASE)
         self.composition_mode_combo.addItem("Ajouter", CompositionMode.ADD)
         self.composition_mode_combo.addItem("Remplacer", CompositionMode.REPLACE)
-        role_form.addRow("Composition", self.composition_mode_combo)
-
-        layout.addWidget(role_group)
+        composition_form.addRow("Mode", self.composition_mode_combo)
+        layout.addWidget(composition_group)
 
         geometry_group = QGroupBox("Geometrie")
         geometry_form = QFormLayout(geometry_group)
@@ -765,7 +783,14 @@ class MainWindow(QMainWindow):
                 mask = np.ones(base_array.shape, dtype=np.float32)
 
         index = self._project.scene.zones.index(zone)
-        dialog = MaskEditorDialog(zone.name, base_array, mask, zone_color(index), parent=self)
+        dialog = MaskEditorDialog(
+            zone.name,
+            base_array,
+            mask,
+            zone_color(index),
+            segmentation_backend=self._segmentation_backend,
+            parent=self,
+        )
         if dialog.exec():
             self._zone_masks[zone.id] = dialog.resulting_mask()
             self._update_source_preview()
@@ -967,8 +992,13 @@ class MainWindow(QMainWindow):
     # Divers
     # ------------------------------------------------------------------ #
     def _show_about(self) -> None:
+        from lithoshape3d import __version__
+
+        ai_status = "disponible" if self._segmentation_backend is not None else "indisponible"
         QMessageBox.information(
             self,
             "A propos de LithoShape3D",
-            "LithoShape3D 0.1\nImage -> lithophanie -> STL.",
+            f"LithoShape3D {__version__}\n"
+            "Image -> zones -> LithoFusion -> STL.\n\n"
+            f"Selection intelligente (SAM2) : {ai_status}.",
         )

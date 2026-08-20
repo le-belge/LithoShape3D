@@ -117,6 +117,35 @@ def test_history_is_bounded_to_max_entries():
     assert controller.history_size <= MAX_HISTORY
 
 
+def test_apply_external_mask_is_one_undo_entry():
+    controller = _empty_controller(shape=(10, 10))
+    external = np.zeros((10, 10), dtype=np.float32)
+    external[2:5, 2:5] = 1.0
+
+    controller.apply_external_mask(external)
+
+    assert controller.history_size == 1
+    assert np.array_equal(controller.mask, external)
+
+
+def test_apply_external_mask_can_be_corrected_with_brush_afterward():
+    controller = _empty_controller(shape=(10, 10))
+    external = np.zeros((10, 10), dtype=np.float32)
+    external[2:5, 2:5] = 1.0
+    controller.apply_external_mask(external)
+
+    _paint_stroke(controller, [(8, 8)], radius=1, value=1.0)
+
+    assert controller.mask[8, 8] == 1.0
+    assert controller.history_size == 2
+
+
+def test_apply_external_mask_rejects_mismatched_shape():
+    controller = _empty_controller(shape=(10, 10))
+    with pytest.raises(ValueError):
+        controller.apply_external_mask(np.zeros((5, 5), dtype=np.float32))
+
+
 def test_stroke_with_no_actual_change_does_not_push_history():
     controller = MaskEditController(np.ones((10, 10), dtype=np.float32))
     _paint_stroke(controller, [(3, 3)], radius=1, value=1.0)  # deja a 1.0 partout
