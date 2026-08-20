@@ -22,6 +22,13 @@ class MeshValidationResult:
     has_nan_or_inf: bool
     bounds_mm: tuple[tuple[float, float, float], tuple[float, float, float]]
     manifold3d_compatible: bool
+    connected_components: int
+    open_boundary_edge_count: int
+    """Diagnostic : plusieurs composantes sont acceptables (ex. ilots
+    disjoints, geres nativement depuis la Phase 2B) et n'invalident pas le
+    mesh a elles seules. Un mesh correctement ferme a toujours 0 arete de
+    bord ; deja implique par `is_watertight`, expose ici a titre
+    d'information/diagnostic explicite."""
 
     @property
     def is_valid(self) -> bool:
@@ -62,6 +69,19 @@ def _check_manifold3d_compatible(mesh: trimesh.Trimesh) -> bool:
     return manifold.status() == manifold3d.Error.NoError and not manifold.is_empty()
 
 
+def _count_open_boundary_edges(mesh: trimesh.Trimesh) -> int:
+    if len(mesh.faces) == 0:
+        return 0
+    _, counts = np.unique(mesh.edges_sorted, axis=0, return_counts=True)
+    return int((counts == 1).sum())
+
+
+def _count_connected_components(mesh: trimesh.Trimesh) -> int:
+    if len(mesh.faces) == 0:
+        return 0
+    return len(mesh.split(only_watertight=False))
+
+
 def validate_mesh(mesh: trimesh.Trimesh) -> MeshValidationResult:
     has_nan_or_inf = not bool(np.all(np.isfinite(mesh.vertices)))
     has_degenerate = not bool(mesh.nondegenerate_faces().all()) if len(mesh.faces) else True
@@ -75,4 +95,6 @@ def validate_mesh(mesh: trimesh.Trimesh) -> MeshValidationResult:
         has_nan_or_inf=has_nan_or_inf,
         bounds_mm=tuple(map(tuple, mesh.bounds.tolist())),
         manifold3d_compatible=_check_manifold3d_compatible(mesh) if not has_nan_or_inf else False,
+        connected_components=_count_connected_components(mesh),
+        open_boundary_edge_count=_count_open_boundary_edges(mesh),
     )

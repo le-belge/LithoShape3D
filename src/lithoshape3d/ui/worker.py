@@ -56,11 +56,8 @@ class GenerationWorker(QRunnable):
             mesh = build_slab_mesh(heightmap, mask=mask, params=self.params)
             result = validate_mesh(mesh)
         except NotImplementedError as exc:
-            logger.info("Generation refusee (masque partiel non supporte) : %s", exc)
-            self.signals.failed.emit(
-                "Cette zone utilise un masque partiel : la generation multi-zone "
-                "n'est pas encore disponible (Phase 2B a venir)."
-            )
+            logger.info("Generation refusee (fonctionnalite non supportee) : %s", exc)
+            self.signals.failed.emit(str(exc))
             self.signals.finished.emit()
             return
         except (ValueError, OSError, RuntimeError) as exc:

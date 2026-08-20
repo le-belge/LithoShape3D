@@ -131,13 +131,22 @@ def test_rejects_non_rectangle_base_shape():
         build_slab_mesh(heightmap, mask=None, params=params)
 
 
-def test_rejects_partial_mask():
-    heightmap = Heightmap(values=np.full((4, 4), 0.5, dtype=np.float32))
-    params = _params()
-    mask = np.ones((4, 4), dtype=bool)
-    mask[0, 0] = False
-    with pytest.raises(NotImplementedError):
-        build_slab_mesh(heightmap, mask=mask, params=params)
+def test_partial_mask_produces_a_smaller_valid_mesh():
+    """Depuis la Phase 2B, un masque partiel est reellement supporte (voir
+    tests/core/geometry/test_masked_mesh.py pour la couverture complete des
+    topologies : trous, ilots, formes concaves, etc.)."""
+    heightmap = Heightmap(values=np.full((10, 10), 0.5, dtype=np.float32))
+    params = _params(width_mm=40.0, height_mm=40.0, resolution=4.0)
+    full_mask = np.ones((10, 10), dtype=bool)
+    partial_mask = np.ones((10, 10), dtype=bool)
+    partial_mask[:, 5:] = False  # moitie gauche seulement
+
+    mesh_full = build_slab_mesh(heightmap, mask=full_mask, params=params)
+    mesh_partial = build_slab_mesh(heightmap, mask=partial_mask, params=params)
+
+    assert len(mesh_partial.faces) < len(mesh_full.faces)
+    result = validate_mesh(mesh_partial)
+    assert result.is_valid
 
 
 def test_fully_active_mask_behaves_like_no_mask():

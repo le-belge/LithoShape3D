@@ -755,11 +755,24 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Export
     # ------------------------------------------------------------------ #
+    def _suggested_stl_filename(self) -> str:
+        def _slug(text: str) -> str:
+            cleaned = "".join(c if c.isalnum() else "-" for c in text.strip())
+            cleaned = "-".join(filter(None, cleaned.split("-")))
+            return cleaned or "sans-titre"
+
+        project_name = _slug(self._project.name)
+        zone = self._active_zone()
+        if zone is not None:
+            return f"{project_name}_{_slug(zone.name)}.stl"
+        return f"{project_name}.stl"
+
     def _on_export_clicked(self) -> None:
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Exporter en STL", "lithophanie.stl", "STL (*.stl)")
+        suggested_name = self._suggested_stl_filename()
+        path, _ = QFileDialog.getSaveFileName(self, "Exporter en STL", suggested_name, "STL (*.stl)")
         if not path:
             return
 

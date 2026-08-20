@@ -49,12 +49,15 @@ def test_worker_emits_failed_for_invalid_params(tmp_path):
     assert finished == [True]
 
 
-def test_worker_rejects_partial_mask_with_friendly_message(tmp_path):
+def test_worker_generates_a_valid_mesh_for_a_partial_mask(tmp_path):
+    """Depuis la Phase 2B, un masque partiel est reellement supporte par le
+    moteur (voir tests/core/geometry/test_masked_mesh.py pour la couverture
+    complete des topologies)."""
     image_path = make_uniform_image(tmp_path / "mid.png", value=128, width=20, height=20)
     params = GeometryParameters(width_mm=30.0, height_mm=20.0, resolution=2.0)
     rows, cols = 10, 15
     partial_mask = np.ones((rows, cols), dtype=np.float32)
-    partial_mask[0, 0] = 0.0  # masque partiel : pas Phase 2B
+    partial_mask[:, cols // 2 :] = 0.0  # moitie seulement
     worker = GenerationWorker(str(image_path), params, mask=partial_mask)
 
     errors = []
@@ -64,10 +67,8 @@ def test_worker_rejects_partial_mask_with_friendly_message(tmp_path):
 
     worker.run()
 
-    assert not results
-    assert len(errors) == 1
-    assert "Phase 2B" in errors[0]
-    assert "traceback" not in errors[0].lower()
+    assert not errors
+    assert len(results) == 1
 
 
 def test_worker_accepts_fully_active_mask_like_no_mask(tmp_path):

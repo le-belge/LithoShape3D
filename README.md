@@ -107,22 +107,40 @@ géométriques. La zone active est mise en surbrillance dans l'aperçu 2D
 (overlay coloré, une teinte par zone, l'image source n'est jamais modifiée).
 
 Ouvrir une image crée automatiquement une zone "Lithophanie" à masque plein
-(comportement historique préservé). La génération/le viewer 3D continuent de
-cibler la zone active ; une zone à masque partiel est refusée proprement
-(fusion multi-zones réelle = Phase 2B, pas encore implémentée).
+(comportement historique préservé). La génération/le viewer 3D ciblent la
+zone active — y compris désormais un masque réellement irrégulier (voir
+Phase 2B ci-dessous).
 
 Menu Fichier : Nouveau projet / Ouvrir projet.../ Enregistrer / Enregistrer
 sous... — un projet est un bundle-dossier `MonProjet.l3dproj/` (image copiée
 dans `source/`, masques dans `masks/`, `project.json`), entièrement
 déplaçable (aucun chemin absolu enregistré).
 
+## Géométrie d'une zone masquée (Phase 2B)
+
+`build_slab_mesh` épouse désormais la forme réelle du masque d'une zone,
+plutôt que de se limiter à la plaque rectangulaire complète : contour
+extérieur, trous internes (ex. anneau) et îlots multiples disjoints sont
+tous gérés nativement (grille régulière + extraction vectorisée des arêtes
+de frontière actif/inactif — voir `core/geometry/mesh_builder.py`). Un
+masque plein (ou `mask=None`) reproduit exactement le comportement
+historique (aucune régression). Un masque insuffisant (zone trop petite/
+fine) est refusé proprement au lieu de produire un mesh corrompu. Les
+coordonnées XY restent toujours celles de la Scene complète — pas de
+recentrage/rescale automatique sur le contour du masque, condition
+nécessaire à la fusion multi-zones de la Phase 2C.
+
+```bash
+python scripts/benchmark_masked_mesh.py
+```
+
 ## État actuel
 
-**Phase 2A — Zones & masques manuels.** Premier jalon réel vers LithoFusion
-3D : modèle multi-zones (`Scene.zones`, masques `float32 [0,1]`), éditeur de
-masque avec undo/redo borné, bundle projet `.l3dproj` portable, migration
-automatique des anciens projets `format_version=1`. `core` reste strictement
-indépendant de Qt/PyVista/VTK (vérifié par test automatisé). Toujours pas de
-segmentation IA, de fusion géométrique multi-zones, de formes non
-rectangulaires, de couleurs/AMS/3MF ni d'intégration Bambu Studio — réservé
-aux phases suivantes.
+**Phase 2B — Géométrie d'une zone masquée.** Une Zone au masque irrégulier
+(peint à la main) peut être générée seule et exportée en STL valide
+(watertight, manifold, sans triangle dégénéré, compatible `manifold3d`) —
+y compris avec des trous ou plusieurs composantes disjointes. `core` reste
+strictement indépendant de Qt/PyVista/VTK (vérifié par test automatisé).
+Toujours pas de fusion géométrique entre plusieurs zones (Phase 2C), de
+segmentation IA, de formes non rectangulaires, de couleurs/AMS/3MF ni
+d'intégration Bambu Studio.

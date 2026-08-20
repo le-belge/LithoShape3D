@@ -1,4 +1,4 @@
-"""heightmap + mask + GeometryParameters -> mesh (plaque rectangulaire fermee).
+"""heightmap + mask + GeometryParameters -> mesh (volume ferme, forme du masque).
 
 Convention des axes :
     X = largeur  (image gauche -> droite)
@@ -8,13 +8,28 @@ Convention des axes :
 
 La face arriere est un plan a Z=0 ; la face avant porte le relief issu de la
 heightmap, entre min_thickness_mm et max_thickness_mm. Le resultat est un
-volume unique ferme (watertight) et manifold (voir core/validation).
+volume ferme (watertight) et manifold (voir core/validation) qui epouse la
+forme du masque : uniquement les cellules de la grille dont les 4 coins sont
+"actifs" (mask >= mask_threshold) recoivent de la geometrie. Un masque
+plein (ou mask=None) reproduit exactement la plaque rectangulaire complete
+(cas historique Phase 1A) -- un seul chemin de code, pas deux moteurs
+separes.
 
-Le winding des faces est construit de facon localement coherente sur toute
-la grille (front, back, 4 bords lateraux), puis retourne globalement une
-seule fois (`faces[:, ::-1]`) pour obtenir des normales sortantes -- ce
-choix a ete verifie empiriquement (watertight + winding coherent + volume
-positif + accepte par manifold3d) plutot que suppose.
+Positionnement : la grille XY couvre toujours params.width_mm x
+params.height_mm dans le repere de la Scene, meme si le masque n'occupe
+qu'une partie de l'image. Aucun recentrage/rescale automatique -- important
+pour superposer plusieurs zones en Phase 2C.
+
+Topologie : le masque peut definir plusieurs composantes disjointes
+(ilots) et des trous (ex. anneau) ; chacun devient une frontiere geometrique
+a part entiere, geree par la meme regle locale par cellule (voir
+`_wall_direction`), sans detection explicite de composantes connexes.
+
+Le winding est construit de facon localement coherente (front, back,
+parois), puis retourne globalement une seule fois (`faces[:, ::-1]`) --
+regle heritee de Phase 1A, revalidee empiriquement pour les topologies avec
+trous/ilots (watertight + winding coherent + volume positif + accepte par
+manifold3d, aucune arete non-manifold, aucune arete de bord residuelle).
 """
 
 from __future__ import annotations
@@ -25,6 +40,13 @@ import trimesh
 from lithoshape3d.core.geometry.heightmap import Heightmap
 from lithoshape3d.core.geometry.thickness import compute_thickness_mm
 from lithoshape3d.core.scene.models import GeometryParameters
+
+DEFAULT_MASK_THRESHOLD = 0.5
+"""Seuil binaire applique au masque float32 [0,1] pour decider la topologie
+(cellule active ou non). Les valeurs intermediaires du masque restent
+disponibles pour un futur feathering (relief/epaisseur progressifs) : ce
+seuil ne modifie ni ne detruit le masque source, il ne sert qu'a decider
+quelles cellules recoivent de la geometrie dans cette phase."""
 
 
 def _side_strip(p: np.ndarray, q: np.ndarray, p_back: np.ndarray, q_back: np.ndarray) -> np.ndarray:
@@ -39,37 +61,99 @@ def _side_strip(p: np.ndarray, q: np.ndarray, p_back: np.ndarray, q_back: np.nda
     return np.concatenate([t1, t2], axis=0)
 
 
+def _build_walls(
+    idx: np.ndarray, back_idx: np.ndarray, cell_active: np.ndarray
+) -> np.ndarray:
+    """Parois le long de toute frontiere active/inactive (bord exterieur,
+    trous, ilots) -- detection vectorisee, construction par arete (le
+    nombre d'aretes de bord est proportionnel au perimetre du masque, pas a
+    sa surface : une boucle Python ici reste rapide, voir benchmark)."""
+    # Aretes verticales (entre vertex (r,c) et (r+1,c)) : bord si la cellule
+    # a gauche (c-1) et la cellule a droite (c) different (hors grille = inactif).
+    padded_h = np.pad(cell_active, ((0, 0), (1, 1)), constant_values=False)
+    wall_v = padded_h[:, :-1] != padded_h[:, 1:]
+    active_is_right = padded_h[:, 1:]
+
+    # Aretes horizontales (entre vertex (r,c) et (r,c+1)) : bord si la
+    # cellule au-dessus (r-1) et la cellule en dessous (r) different.
+    padded_v = np.pad(cell_active, ((1, 1), (0, 0)), constant_values=False)
+    wall_h = padded_v[:-1, :] != padded_v[1:, :]
+    active_is_below = padded_v[1:, :]
+
+    strips: list[np.ndarray] = []
+
+    vr, vc = np.nonzero(wall_v)
+    if len(vr):
+        top_v, bottom_v = idx[vr, vc], idx[vr + 1, vc]
+        top_vb, bottom_vb = back_idx[vr, vc], back_idx[vr + 1, vc]
+        right_active = active_is_right[vr, vc]
+        # cellule active a droite -> cote "gauche" de cette cellule -> C->A
+        strips.append(
+            _side_strip(
+                bottom_v[right_active], top_v[right_active], bottom_vb[right_active], top_vb[right_active]
+            )
+        )
+        # cellule active a gauche -> cote "droit" -> A->C
+        left_active = ~right_active
+        strips.append(
+            _side_strip(
+                top_v[left_active], bottom_v[left_active], top_vb[left_active], bottom_vb[left_active]
+            )
+        )
+
+    hr, hc = np.nonzero(wall_h)
+    if len(hr):
+        left_h, right_h = idx[hr, hc], idx[hr, hc + 1]
+        left_hb, right_hb = back_idx[hr, hc], back_idx[hr, hc + 1]
+        below_active = active_is_below[hr, hc]
+        # cellule active en dessous -> cote "haut" -> A->B
+        strips.append(
+            _side_strip(
+                left_h[below_active], right_h[below_active], left_hb[below_active], right_hb[below_active]
+            )
+        )
+        # cellule active au-dessus -> cote "bas" -> B->A
+        above_active = ~below_active
+        strips.append(
+            _side_strip(
+                right_h[above_active], left_h[above_active], right_hb[above_active], left_hb[above_active]
+            )
+        )
+
+    if not strips:
+        return np.zeros((0, 3), dtype=np.int64)
+    return np.concatenate(strips, axis=0)
+
+
 def build_slab_mesh(
     heightmap: Heightmap,
     mask: np.ndarray | None,
     params: GeometryParameters,
+    mask_threshold: float = DEFAULT_MASK_THRESHOLD,
 ) -> trimesh.Trimesh:
-    """Genere une plaque rectangulaire fermee a partir d'une heightmap.
+    """Genere un volume ferme epousant la forme du masque a partir d'une heightmap.
 
-    `mask` est reserve aux futures zones LithoFusion : en Phase 1A il doit
-    etre `None` ou entierement actif (True partout) et n'affecte pas encore
-    la geometrie generee.
+    `mask=None` (ou un masque entierement >= `mask_threshold`) reproduit
+    exactement la plaque rectangulaire complete. Un masque partiel decoupe
+    la geometrie selon sa frontiere reelle (trous et ilots geres nativement).
     """
     if params.base_shape != "rectangle":
         raise NotImplementedError(
-            f"base_shape={params.base_shape!r} non supporte en Phase 1A (rectangle uniquement)"
+            f"base_shape={params.base_shape!r} non supporte (rectangle uniquement)"
         )
 
     values = heightmap.values
-    if mask is not None:
-        if mask.shape != values.shape:
-            raise ValueError("mask doit avoir la meme forme que la heightmap")
-        if not mask.all():
-            raise NotImplementedError(
-                "les masques partiels seront geres en phase LithoFusion ; "
-                "Phase 1A ne supporte qu'un mask entierement actif ou None"
-            )
+    if mask is not None and mask.shape != values.shape:
+        raise ValueError("mask doit avoir la meme forme que la heightmap")
 
     thickness_mm = compute_thickness_mm(values, params)
+    active = np.ones_like(values, dtype=bool) if mask is None else (mask >= mask_threshold)
+
     # L'image a pour origine (0,0) en haut-gauche (convention Pillow/numpy) ;
     # on retourne verticalement pour que le haut de l'image corresponde au Y
     # maximum du modele (orientation "a l'endroit" une fois le modele debout).
     thickness_mm = np.flipud(thickness_mm)
+    active = np.flipud(active)
 
     rows, cols = thickness_mm.shape
 
@@ -87,28 +171,28 @@ def build_slab_mesh(
     idx = np.arange(n_grid, dtype=np.int64).reshape(rows, cols)
     back_idx = idx + n_grid
 
-    a = idx[:-1, :-1].ravel()
-    b = idx[:-1, 1:].ravel()
-    c = idx[1:, :-1].ravel()
-    d = idx[1:, 1:].ravel()
-    front_faces = np.concatenate(
-        [np.stack([a, d, b], axis=1), np.stack([a, c, d], axis=1)], axis=0
-    )
+    cell_active = active[:-1, :-1] & active[:-1, 1:] & active[1:, :-1] & active[1:, 1:]
+    if not cell_active.any():
+        raise ValueError(
+            "Masque insuffisant pour generer une geometrie : aucune cellule "
+            "entierement active (zone trop petite ou trop fine pour la resolution courante)."
+        )
 
-    ab = back_idx[:-1, :-1].ravel()
-    bb = back_idx[:-1, 1:].ravel()
-    cb = back_idx[1:, :-1].ravel()
-    db = back_idx[1:, 1:].ravel()
-    back_faces = np.concatenate(
-        [np.stack([ab, bb, db], axis=1), np.stack([ab, db, cb], axis=1)], axis=0
-    )
+    a = idx[:-1, :-1][cell_active]
+    b = idx[:-1, 1:][cell_active]
+    c = idx[1:, :-1][cell_active]
+    d = idx[1:, 1:][cell_active]
+    front_faces = np.concatenate([np.stack([a, d, b], axis=1), np.stack([a, c, d], axis=1)], axis=0)
 
-    top = _side_strip(idx[0, :-1], idx[0, 1:], back_idx[0, :-1], back_idx[0, 1:])
-    bottom = _side_strip(idx[-1, 1:], idx[-1, :-1], back_idx[-1, 1:], back_idx[-1, :-1])
-    left = _side_strip(idx[1:, 0], idx[:-1, 0], back_idx[1:, 0], back_idx[:-1, 0])
-    right = _side_strip(idx[:-1, -1], idx[1:, -1], back_idx[:-1, -1], back_idx[1:, -1])
+    ab = back_idx[:-1, :-1][cell_active]
+    bb = back_idx[:-1, 1:][cell_active]
+    cb = back_idx[1:, :-1][cell_active]
+    db = back_idx[1:, 1:][cell_active]
+    back_faces = np.concatenate([np.stack([ab, bb, db], axis=1), np.stack([ab, db, cb], axis=1)], axis=0)
 
-    faces = np.concatenate([front_faces, back_faces, top, bottom, left, right], axis=0)
+    walls = _build_walls(idx, back_idx, cell_active)
+
+    faces = np.concatenate([front_faces, back_faces, walls], axis=0)
     faces = faces[:, ::-1]  # flip global : normales sortantes (verifie empiriquement)
 
     vertices = np.concatenate([front_vertices, back_vertices], axis=0)
@@ -116,5 +200,6 @@ def build_slab_mesh(
 
     if mesh.volume < 0:
         mesh.invert()
+    mesh.remove_unreferenced_vertices()
 
     return mesh
