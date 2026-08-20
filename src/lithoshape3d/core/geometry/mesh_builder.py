@@ -125,43 +125,25 @@ def _build_walls(
     return np.concatenate(strips, axis=0)
 
 
-def build_slab_mesh(
-    heightmap: Heightmap,
-    mask: np.ndarray | None,
-    params: GeometryParameters,
-    mask_threshold: float = DEFAULT_MASK_THRESHOLD,
+def build_mesh_from_heightfield(
+    front_z: np.ndarray,
+    active: np.ndarray,
+    width_mm: float,
+    height_mm: float,
 ) -> trimesh.Trimesh:
-    """Genere un volume ferme epousant la forme du masque a partir d'une heightmap.
+    """Construit le volume ferme a partir d'un champ de hauteur DEJA oriente
+    (Y-up, cf. flip dans `build_slab_mesh`) et DEJA compose si besoin.
 
-    `mask=None` (ou un masque entierement >= `mask_threshold`) reproduit
-    exactement la plaque rectangulaire complete. Un masque partiel decoupe
-    la geometrie selon sa frontiere reelle (trous et ilots geres nativement).
+    Reutilise a la fois par le moteur mono-zone (`build_slab_mesh`) et par la
+    composition multi-zone (`core/geometry/composition.py`) -- un seul
+    chemin de construction de mesh, pas deux moteurs separes.
     """
-    if params.base_shape != "rectangle":
-        raise NotImplementedError(
-            f"base_shape={params.base_shape!r} non supporte (rectangle uniquement)"
-        )
+    rows, cols = front_z.shape
 
-    values = heightmap.values
-    if mask is not None and mask.shape != values.shape:
-        raise ValueError("mask doit avoir la meme forme que la heightmap")
-
-    thickness_mm = compute_thickness_mm(values, params)
-    active = np.ones_like(values, dtype=bool) if mask is None else (mask >= mask_threshold)
-
-    # L'image a pour origine (0,0) en haut-gauche (convention Pillow/numpy) ;
-    # on retourne verticalement pour que le haut de l'image corresponde au Y
-    # maximum du modele (orientation "a l'endroit" une fois le modele debout).
-    thickness_mm = np.flipud(thickness_mm)
-    active = np.flipud(active)
-
-    rows, cols = thickness_mm.shape
-
-    xs = np.linspace(0.0, params.width_mm, cols, dtype=np.float32)
-    ys = np.linspace(0.0, params.height_mm, rows, dtype=np.float32)
+    xs = np.linspace(0.0, width_mm, cols, dtype=np.float32)
+    ys = np.linspace(0.0, height_mm, rows, dtype=np.float32)
     grid_x, grid_y = np.meshgrid(xs, ys)
 
-    front_z = thickness_mm
     back_z = np.zeros_like(front_z)
 
     front_vertices = np.stack([grid_x, grid_y, front_z], axis=-1).reshape(-1, 3)
@@ -203,3 +185,36 @@ def build_slab_mesh(
     mesh.remove_unreferenced_vertices()
 
     return mesh
+
+
+def build_slab_mesh(
+    heightmap: Heightmap,
+    mask: np.ndarray | None,
+    params: GeometryParameters,
+    mask_threshold: float = DEFAULT_MASK_THRESHOLD,
+) -> trimesh.Trimesh:
+    """Genere un volume ferme epousant la forme du masque a partir d'une heightmap.
+
+    `mask=None` (ou un masque entierement >= `mask_threshold`) reproduit
+    exactement la plaque rectangulaire complete. Un masque partiel decoupe
+    la geometrie selon sa frontiere reelle (trous et ilots geres nativement).
+    """
+    if params.base_shape != "rectangle":
+        raise NotImplementedError(
+            f"base_shape={params.base_shape!r} non supporte (rectangle uniquement)"
+        )
+
+    values = heightmap.values
+    if mask is not None and mask.shape != values.shape:
+        raise ValueError("mask doit avoir la meme forme que la heightmap")
+
+    thickness_mm = compute_thickness_mm(values, params)
+    active = np.ones_like(values, dtype=bool) if mask is None else (mask >= mask_threshold)
+
+    # L'image a pour origine (0,0) en haut-gauche (convention Pillow/numpy) ;
+    # on retourne verticalement pour que le haut de l'image corresponde au Y
+    # maximum du modele (orientation "a l'endroit" une fois le modele debout).
+    thickness_mm = np.flipud(thickness_mm)
+    active = np.flipud(active)
+
+    return build_mesh_from_heightfield(thickness_mm, active, params.width_mm, params.height_mm)

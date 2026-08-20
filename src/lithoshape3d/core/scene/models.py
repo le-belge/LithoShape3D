@@ -19,6 +19,17 @@ class ReliefMode(Enum):
     SOLID = "solid"
 
 
+class CompositionMode(Enum):
+    """Comment la contribution d'une Zone interagit avec le resultat deja
+    compose (voir core/geometry/composition.py pour les formules exactes).
+    Concept independant de ReliefMode (qui decrit comment la Zone transforme
+    son image en relief). SUBTRACT reserve pour une phase future."""
+
+    BASE = "base"
+    ADD = "add"
+    REPLACE = "replace"
+
+
 @dataclass
 class Transform:
     translation: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -61,6 +72,10 @@ class Zone:
     material: Material = field(default_factory=Material)
     transform: Transform = field(default_factory=Transform)
     relief_mode: ReliefMode = ReliefMode.LITHOPHANE
+    composition_mode: CompositionMode = CompositionMode.ADD
+    """BASE pour une zone de fondation (typiquement la premiere), ADD par
+    defaut pour toute nouvelle zone (cas le plus frequent : ajouter un
+    element sur une base existante)."""
     mesh_cache_path: str | None = None
 
 
@@ -76,4 +91,4 @@ class Scene:
 class Project:
     name: str = "untitled"
     scene: Scene = field(default_factory=Scene)
-    format_version: int = 2
+    format_version: int = 3

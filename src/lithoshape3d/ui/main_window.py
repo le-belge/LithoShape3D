@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from lithoshape3d.core.export.stl_export import export_stl
+from lithoshape3d.core.geometry.composition import ZoneSource
 from lithoshape3d.core.geometry.heightmap import height_mm_from_aspect_ratio
 from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import image_size
@@ -46,12 +48,18 @@ from lithoshape3d.core.image.preprocessing import (
     to_grayscale_array,
 )
 from lithoshape3d.core.scene.mask_io import load_zone_mask
-from lithoshape3d.core.scene.models import GeometryParameters, Project, Zone
+from lithoshape3d.core.scene.models import (
+    CompositionMode,
+    GeometryParameters,
+    Project,
+    ReliefMode,
+    Zone,
+)
 from lithoshape3d.core.scene.project_io import load_project_bundle, save_project_bundle
 from lithoshape3d.ui.mask_editor_dialog import MaskEditorDialog
 from lithoshape3d.ui.overlay import render_overlay, zone_color
 from lithoshape3d.ui.state import AppState
-from lithoshape3d.ui.worker import GenerationWorker
+from lithoshape3d.ui.worker import CompositionWorker, GenerationWorker
 from lithoshape3d.viewer.scene_viewer import DisplayMode, SceneViewer
 
 logger = logging.getLogger("lithoshape3d.ui")
@@ -250,6 +258,24 @@ class MainWindow(QMainWindow):
         self.preset_combo.currentTextChanged.connect(self._apply_preset)
         layout.addWidget(self.preset_combo)
 
+        role_group = QGroupBox("Role de la zone")
+        role_form = QFormLayout(role_group)
+        role_form.setSpacing(8)
+
+        self.relief_mode_combo = QComboBox()
+        self.relief_mode_combo.addItem("Lithophanie", ReliefMode.LITHOPHANE)
+        self.relief_mode_combo.addItem("Relief (amplitude)", ReliefMode.RELIEF)
+        self.relief_mode_combo.addItem("Solide (hauteur constante)", ReliefMode.SOLID)
+        role_form.addRow("Relief", self.relief_mode_combo)
+
+        self.composition_mode_combo = QComboBox()
+        self.composition_mode_combo.addItem("Base", CompositionMode.BASE)
+        self.composition_mode_combo.addItem("Ajouter", CompositionMode.ADD)
+        self.composition_mode_combo.addItem("Remplacer", CompositionMode.REPLACE)
+        role_form.addRow("Composition", self.composition_mode_combo)
+
+        layout.addWidget(role_group)
+
         geometry_group = QGroupBox("Geometrie")
         geometry_form = QFormLayout(geometry_group)
         geometry_form.setSpacing(8)
@@ -311,6 +337,21 @@ class MainWindow(QMainWindow):
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(8)
 
+        view_scope_layout = QHBoxLayout()
+        view_scope_layout.setSpacing(6)
+        self.view_zone_button = QPushButton("Zone active")
+        self.view_zone_button.setCheckable(True)
+        self.view_zone_button.setChecked(True)
+        self.view_composition_button = QPushButton("Composition")
+        self.view_composition_button.setCheckable(True)
+        self.view_scope_group = QButtonGroup(self)
+        self.view_scope_group.setExclusive(True)
+        self.view_scope_group.addButton(self.view_zone_button)
+        self.view_scope_group.addButton(self.view_composition_button)
+        view_scope_layout.addWidget(self.view_zone_button)
+        view_scope_layout.addWidget(self.view_composition_button)
+        display_layout.addLayout(view_scope_layout)
+
         self.display_mode_combo = QComboBox()
         self.display_mode_combo.addItem("Surface", DisplayMode.SURFACE)
         self.display_mode_combo.addItem("Fil de fer", DisplayMode.WIREFRAME)
@@ -348,6 +389,8 @@ class MainWindow(QMainWindow):
         self.contrast_spin.valueChanged.connect(self._update_source_preview)
         self.brightness_spin.valueChanged.connect(self._update_source_preview)
         self.invert_checkbox.toggled.connect(self._update_source_preview)
+        self.relief_mode_combo.currentIndexChanged.connect(self._on_zone_role_changed)
+        self.composition_mode_combo.currentIndexChanged.connect(self._on_zone_role_changed)
 
         return panel
 
@@ -555,7 +598,11 @@ class MainWindow(QMainWindow):
         deja (nouveau workflow) -- un projet rouvert n'est jamais ecrase."""
         if self._project.scene.zones:
             return
-        zone = Zone(name="Lithophanie", geometry_params=self._current_geometry_parameters())
+        zone = Zone(
+            name="Lithophanie",
+            composition_mode=CompositionMode.BASE,
+            geometry_params=self._current_geometry_parameters(),
+        )
         self._project.scene.zones.append(zone)
         self._project.scene.active_zone_id = zone.id
 
@@ -572,15 +619,40 @@ class MainWindow(QMainWindow):
             mask = resize_array(mask, width_px=shape[1], height_px=shape[0])
         return mask
 
-    def _active_zone_mask_for_generation(self, zone: Zone) -> np.ndarray | None:
+    def _zone_mask_for_generation(self, zone: Zone) -> np.ndarray | None:
         """None si la zone n'a jamais ete touchee (comportement historique,
-        aucune verification necessaire -- pas de fichier, pas de masque)."""
+        aucune verification necessaire -- pas de fichier, pas de masque).
+        Fonctionne pour n'importe quelle zone, pas seulement l'active :
+        reutilise par la composition multi-zone."""
         if zone.id in self._zone_masks:
             return self._zone_masks[zone.id]
         if zone.mask_path is None or self._project_bundle_dir is None:
             return None
-        width_px, height_px = image_size(self._image_path)
+        width_px, height_px = image_size(self._resolve_zone_image_path(zone))
         return load_zone_mask(self._project_bundle_dir, zone, shape=(height_px, width_px))
+
+    def _resolve_zone_image_path(self, zone: Zone) -> str:
+        """La plupart des zones n'ont pas de source propre (override rare,
+        voir Zone.source_image_path) et utilisent l'image partagee de la
+        Scene, deja resolue dans self._image_path."""
+        if zone.source_image_path:
+            path = Path(zone.source_image_path)
+            if not path.is_absolute() and self._project_bundle_dir is not None:
+                path = self._project_bundle_dir / path
+            return str(path)
+        return self._image_path
+
+    def _build_zone_sources(self) -> list[ZoneSource]:
+        return [
+            ZoneSource(
+                zone=zone,
+                image_path=self._resolve_zone_image_path(zone),
+                mask=self._zone_mask_for_generation(zone),
+                brightness=self.brightness_spin.value(),
+                contrast=self.contrast_spin.value(),
+            )
+            for zone in self._project.scene.zones
+        ]
 
     def _refresh_zones_list(self) -> None:
         self.zones_list.blockSignals(True)
@@ -610,7 +682,27 @@ class MainWindow(QMainWindow):
         self.max_thickness_spin.setValue(params.max_thickness_mm)
         self.resolution_spin.setValue(params.resolution)
         self.invert_checkbox.setChecked(params.invert)
+        self._set_combo_data(self.relief_mode_combo, zone.relief_mode)
+        self._set_combo_data(self.composition_mode_combo, zone.composition_mode)
         self._update_height_display()
+
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value: object) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _on_zone_role_changed(self, *_args) -> None:
+        zone = self._active_zone()
+        if zone is None:
+            return
+        zone.relief_mode = self.relief_mode_combo.currentData()
+        zone.composition_mode = self.composition_mode_combo.currentData()
+
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+        elif self._state is AppState.ERROR:
+            self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
 
     def _on_zone_selection_changed(self) -> None:
         item = self.zones_list.currentItem()
@@ -719,16 +811,20 @@ class MainWindow(QMainWindow):
         if not self._image_path:
             return
 
-        zone = self._active_zone()
-        params = self._current_geometry_parameters()
-        mask = self._active_zone_mask_for_generation(zone) if zone is not None else None
-        worker = GenerationWorker(
-            self._image_path,
-            params,
-            brightness=self.brightness_spin.value(),
-            contrast=self.contrast_spin.value(),
-            mask=mask,
-        )
+        if self.view_composition_button.isChecked():
+            worker = CompositionWorker(self._build_zone_sources())
+        else:
+            zone = self._active_zone()
+            params = self._current_geometry_parameters()
+            mask = self._zone_mask_for_generation(zone) if zone is not None else None
+            worker = GenerationWorker(
+                self._image_path,
+                params,
+                brightness=self.brightness_spin.value(),
+                contrast=self.contrast_spin.value(),
+                mask=mask,
+            )
+
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)
 

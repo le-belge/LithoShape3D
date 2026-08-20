@@ -13,6 +13,7 @@ import logging
 import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+from lithoshape3d.core.geometry.composition import ZoneSource, compose_scene_mesh
 from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
 from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
 from lithoshape3d.core.image.preprocessing import resize_array
@@ -76,6 +77,48 @@ class GenerationWorker(QRunnable):
                 len(mesh.vertices),
                 len(mesh.faces),
                 result.volume_mm3,
+            )
+            self.signals.succeeded.emit(mesh)
+
+        self.signals.finished.emit()
+
+
+class CompositionWorker(QRunnable):
+    """Genere le mesh compose (toutes les zones visibles, dans l'ordre
+    Scene.zones) en arriere-plan. Meme discipline que GenerationWorker :
+    aucun widget touche, resultats uniquement via signaux."""
+
+    def __init__(self, zone_sources: list[ZoneSource]) -> None:
+        super().__init__()
+        self.zone_sources = zone_sources
+        self.signals = GenerationSignals()
+
+    def run(self) -> None:
+        try:
+            mesh = compose_scene_mesh(self.zone_sources)
+            result = validate_mesh(mesh)
+        except NotImplementedError as exc:
+            logger.info("Composition refusee (fonctionnalite non supportee) : %s", exc)
+            self.signals.failed.emit(str(exc))
+            self.signals.finished.emit()
+            return
+        except (ValueError, OSError, RuntimeError) as exc:
+            logger.exception("Echec de la composition multi-zone")
+            self.signals.failed.emit(str(exc))
+            self.signals.finished.emit()
+            return
+
+        if not result.is_valid:
+            message = "Composition invalide : " + ", ".join(result.issues())
+            logger.error(message)
+            self.signals.failed.emit(message)
+        else:
+            logger.info(
+                "Composition generee : %d sommets, %d faces, volume=%.1f mm3, %d composante(s)",
+                len(mesh.vertices),
+                len(mesh.faces),
+                result.volume_mm3,
+                result.connected_components,
             )
             self.signals.succeeded.emit(mesh)
 

@@ -142,7 +142,7 @@ def test_generation_uses_none_mask_for_untouched_default_zone(main_window, tmp_p
     _load(main_window, tmp_path)
     zone = main_window._active_zone()
 
-    mask = main_window._active_zone_mask_for_generation(zone)
+    mask = main_window._zone_mask_for_generation(zone)
 
     assert mask is None  # comportement historique preserve
 
@@ -153,7 +153,7 @@ def test_generation_uses_in_memory_edited_mask(main_window, tmp_path):
     edited = np.zeros((20, 20), dtype=np.float32)
     main_window._zone_masks[zone.id] = edited
 
-    mask = main_window._active_zone_mask_for_generation(zone)
+    mask = main_window._zone_mask_for_generation(zone)
 
     assert mask is edited
 

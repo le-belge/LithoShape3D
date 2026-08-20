@@ -68,11 +68,12 @@ _V1_MULTI_ZONE_ATYPICAL = {
 def test_v1_single_zone_migrates_source_to_scene():
     project = project_from_dict(copy.deepcopy(_V1_SINGLE_ZONE))
 
-    assert project.format_version == 2
+    assert project.format_version == 3  # migration chainee v1 -> v2 -> v3
     assert project.scene.source_image_path == "images/photo.jpg"
     assert project.scene.zones[0].source_image_path is None  # promu, plus de doublon
     assert project.scene.zones[0].visible is True
     assert project.scene.active_zone_id == "zone-1"
+    assert project.scene.zones[0].composition_mode.value == "base"  # premiere zone -> BASE
 
 
 def test_v1_atypical_multi_zone_keeps_all_zones():

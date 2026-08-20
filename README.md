@@ -134,13 +134,38 @@ nécessaire à la fusion multi-zones de la Phase 2C.
 python scripts/benchmark_masked_mesh.py
 ```
 
+## Composition multi-zones — LithoFusion (Phase 2C)
+
+Plusieurs zones peuvent maintenant être combinées en un seul objet
+imprimable. Chaque zone a un **rôle** (panneau "Rôle de la zone") :
+
+- `ReliefMode` (Lithophanie / Relief-amplitude / Solide) — comment la zone
+  transforme son image en hauteur.
+- `CompositionMode` (Base / Ajouter / Remplacer) — comment cette
+  contribution s'intègre au résultat déjà composé. `Base` et `Remplacer`
+  écrasent la hauteur dans leur masque, `Ajouter` s'y additionne.
+
+Composition séquentielle selon l'ordre `Scene.zones` (le glisser-déposer du
+panneau Zones a donc maintenant un effet géométrique réel), entièrement par
+champ de hauteur NumPy — aucun booléen `manifold3d` entre zones, réservé à
+la validation finale et aux futurs volumes non planaires. Le dos reste
+toujours à `Z=0` : une contribution ne peut jamais "flotter", au pire elle
+forme une composante connexe supplémentaire posée sur le même plateau.
+
+Dans l'affichage, bascule "Zone active / Composition" détermine ce que
+`Générer` produit ; l'export STL exporte toujours le résultat actuellement
+affiché.
+
+```bash
+python scripts/benchmark_composition.py
+```
+
 ## État actuel
 
-**Phase 2B — Géométrie d'une zone masquée.** Une Zone au masque irrégulier
-(peint à la main) peut être générée seule et exportée en STL valide
-(watertight, manifold, sans triangle dégénéré, compatible `manifold3d`) —
-y compris avec des trous ou plusieurs composantes disjointes. `core` reste
-strictement indépendant de Qt/PyVista/VTK (vérifié par test automatisé).
-Toujours pas de fusion géométrique entre plusieurs zones (Phase 2C), de
-segmentation IA, de formes non rectangulaires, de couleurs/AMS/3MF ni
-d'intégration Bambu Studio.
+**Phase 2C — Composition multi-zones (LithoFusion).** Base + zones `ADD`/
+`REPLACE` se combinent en un unique mesh manifold (watertight, winding
+cohérent, 0 bord ouvert, compatible `manifold3d`), exportable en un seul
+STL. `core` reste strictement indépendant de Qt/PyVista/VTK (vérifié par
+test automatisé). Toujours pas de `SUBTRACT`, de segmentation IA, de
+formes non rectangulaires, de couleurs/AMS/3MF ni d'intégration Bambu
+Studio.

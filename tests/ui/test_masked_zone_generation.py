@@ -49,7 +49,7 @@ def test_generate_masked_zone_end_to_end(main_window, tmp_path):
     controller.end_stroke()
     main_window._zone_masks[zone.id] = controller.mask.copy()
 
-    mask_for_generation = main_window._active_zone_mask_for_generation(zone)
+    mask_for_generation = main_window._zone_mask_for_generation(zone)
     assert mask_for_generation is not None
     assert not mask_for_generation.all()  # bien un masque partiel, pas plein
 
@@ -77,7 +77,7 @@ def test_generate_full_default_zone_still_matches_full_rectangle(main_window, tm
     main_window.resolution_spin.setValue(2.0)
     zone = main_window._active_zone()
 
-    mask = main_window._active_zone_mask_for_generation(zone)
+    mask = main_window._zone_mask_for_generation(zone)
     assert mask is None  # comportement historique : aucune verification necessaire
 
     params = main_window._current_geometry_parameters()

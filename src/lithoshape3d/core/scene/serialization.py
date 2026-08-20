@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from lithoshape3d.core.scene.models import (
+    CompositionMode,
     GeometryParameters,
     Material,
     Project,
@@ -22,7 +23,7 @@ from lithoshape3d.core.scene.models import (
     Zone,
 )
 
-CURRENT_FORMAT_VERSION = 2
+CURRENT_FORMAT_VERSION = 3
 
 
 def _transform_to_dict(transform: Transform) -> dict[str, Any]:
@@ -94,6 +95,7 @@ def _zone_to_dict(zone: Zone) -> dict[str, Any]:
         "material": _material_to_dict(zone.material),
         "transform": _transform_to_dict(zone.transform),
         "relief_mode": zone.relief_mode.value,
+        "composition_mode": zone.composition_mode.value,
         "mesh_cache_path": zone.mesh_cache_path,
     }
 
@@ -109,6 +111,7 @@ def _zone_from_dict(data: dict[str, Any]) -> Zone:
         material=_material_from_dict(data.get("material", {})),
         transform=_transform_from_dict(data.get("transform", {})),
         relief_mode=ReliefMode(data.get("relief_mode", ReliefMode.LITHOPHANE.value)),
+        composition_mode=CompositionMode(data.get("composition_mode", CompositionMode.ADD.value)),
         mesh_cache_path=data.get("mesh_cache_path"),
     )
 
@@ -156,8 +159,34 @@ def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """Migration additive : ajoute Zone.composition_mode.
+
+    Un projet v2 n'a jamais compose ses zones entre elles (chaque zone
+    n'etait generee qu'independamment, seule). Pour ne PAS changer
+    silencieusement l'apparence d'un projet existant si l'utilisateur active
+    un jour la composition dessus :
+      - la premiere zone devient BASE (fondation, coherent avec le
+        comportement historique "generer la zone active" ou la premiere
+        zone est typiquement la lithophanie complete) ;
+      - toutes les zones suivantes deviennent REPLACE, pas ADD : une zone
+        REPLACE conserve exactement son propre contenu dans son masque
+        (comme une generation independante), alors qu'ADD cumulerait des
+        epaisseurs qui ne se sont jamais sommees auparavant -- un choix ADD
+        par defaut aurait modifie le resultat visuel de facon inattendue.
+    """
+    zones_data = data.get("scene", {}).get("zones", [])
+    for index, zone_data in enumerate(zones_data):
+        zone_data.setdefault(
+            "composition_mode", CompositionMode.BASE.value if index == 0 else CompositionMode.REPLACE.value
+        )
+    data["format_version"] = 3
+    return data
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 
