@@ -206,6 +206,19 @@ class MainWindow(QMainWindow):
 
         self._set_state(AppState.NO_IMAGE)
 
+    def closeEvent(self, event) -> None:
+        """Finalise proprement le render window VTK avant que Qt ne detruise
+        la fenetre native -- sans cela, un rendu VTK mis en file d'attente
+        (timer/queued signal) peut s'executer apres coup et segfaulter en
+        touchant une fenetre Cocoa deja liberee (crash observe sur macOS)."""
+        plotter = getattr(self, "plotter", None)
+        if plotter is not None and hasattr(plotter, "close"):
+            try:
+                plotter.close()
+            except Exception:
+                logger.exception("Erreur a la fermeture du viewer 3D")
+        super().closeEvent(event)
+
     # ------------------------------------------------------------------ #
     # Construction de l'interface
     # ------------------------------------------------------------------ #
@@ -700,8 +713,15 @@ class MainWindow(QMainWindow):
         self.max_thickness_spin.setValue(params.max_thickness_mm)
         self.resolution_spin.setValue(params.resolution)
         self.invert_checkbox.setChecked(params.invert)
+        # signaux bloques : sinon `setCurrentIndex` sur le 1er combo declenche
+        # _on_zone_role_changed AVANT que le 2eme combo ne soit a jour, qui
+        # ecrase alors zone.composition_mode avec la valeur perimee du combo.
+        self.relief_mode_combo.blockSignals(True)
+        self.composition_mode_combo.blockSignals(True)
         self._set_combo_data(self.relief_mode_combo, zone.relief_mode)
         self._set_combo_data(self.composition_mode_combo, zone.composition_mode)
+        self.relief_mode_combo.blockSignals(False)
+        self.composition_mode_combo.blockSignals(False)
         self._update_height_display()
 
     @staticmethod

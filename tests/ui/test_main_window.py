@@ -1,5 +1,6 @@
 import time
 
+from lithoshape3d.core.scene.models import CompositionMode, ReliefMode
 from lithoshape3d.ui.state import AppState
 from tests.fixtures.synthetic_images import make_gradient_image
 
@@ -159,3 +160,27 @@ def test_end_to_end_generate_via_thread_pool(qapp, main_window, tmp_path, monkey
     assert main_window._state is AppState.MESH_READY
     assert main_window.export_button.isEnabled()
     assert main_window._current_mesh is not None
+
+
+def test_switching_zone_does_not_corrupt_relief_or_composition_mode(main_window, tmp_path):
+    """Regression : passer d'une zone a l'autre dans le panneau ne doit pas
+    ecraser relief_mode/composition_mode de la zone qui vient d'etre chargee
+    avec une valeur perimee de l'autre combo (bug de signaux non bloques)."""
+    _load(main_window, tmp_path)
+    zone_a = main_window._active_zone()
+    zone_a.relief_mode = ReliefMode.LITHOPHANE
+    zone_a.composition_mode = CompositionMode.BASE
+
+    main_window._on_new_zone_clicked()
+    zone_b = main_window._active_zone()
+    zone_b.relief_mode = ReliefMode.SOLID
+    zone_b.composition_mode = CompositionMode.ADD
+    main_window._refresh_zones_list()
+
+    main_window.zones_list.setCurrentRow(0)
+    main_window.zones_list.setCurrentRow(1)
+
+    assert zone_a.relief_mode is ReliefMode.LITHOPHANE
+    assert zone_a.composition_mode is CompositionMode.BASE
+    assert zone_b.relief_mode is ReliefMode.SOLID
+    assert zone_b.composition_mode is CompositionMode.ADD

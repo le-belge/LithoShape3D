@@ -1,0 +1,148 @@
+{
+  "format_version": 3,
+  "name": "untitled",
+  "scene": {
+    "zones": [
+      {
+        "id": "f97a4eda-1636-46db-aa18-97b2fdaf4435",
+        "name": "Portrait",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": null,
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.8,
+          "max_thickness_mm": 3.0,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "default",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "filament_type": null,
+          "translucent": false
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "lithophane",
+        "composition_mode": "base",
+        "mesh_cache_path": null
+      },
+      {
+        "id": "f89f9b03-bd6a-42f4-9307-0cf4ca22932e",
+        "name": "Cheveux",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": "masks/f89f9b03-bd6a-42f4-9307-0cf4ca22932e.png",
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.2,
+          "max_thickness_mm": 0.6,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "default",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "filament_type": null,
+          "translucent": false
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "relief",
+        "composition_mode": "add",
+        "mesh_cache_path": null
+      },
+      {
+        "id": "65128782-441f-40d4-a016-9295ea83f97a",
+        "name": "Lunettes",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": "masks/65128782-441f-40d4-a016-9295ea83f97a.png",
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 1.2,
+          "max_thickness_mm": 1.2,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "default",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "filament_type": null,
+          "translucent": false
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "solid",
+        "composition_mode": "add",
+        "mesh_cache_path": null
+      }
+    ],
+    "source_image_path": "source/demo_portrait_0_2.png",
+    "active_zone_id": "65128782-441f-40d4-a016-9295ea83f97a"
+  }
+}
