@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -288,8 +289,21 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_params_panel(self) -> QWidget:
+        """Enveloppe dans une QScrollArea verticale : le nombre de groupes
+        (Relief/Composition/Materiau/Geometrie/Image/Support/Affichage) peut
+        depasser la hauteur disponible sur un ecran plus petit que celui du
+        developpeur -- sans ca, les derniers controles (Affichage, boutons de
+        vue) deviennent inaccessibles sans aucun scroll (bug utilisateur
+        constate sur le premier vrai test de la 0.3.0)."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setMinimumWidth(240)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.params_scroll_area = scroll_area
+
         panel = QWidget()
-        panel.setMinimumWidth(240)
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
 
@@ -511,7 +525,8 @@ class MainWindow(QMainWindow):
         ):
             spin.valueChanged.connect(self._on_support_changed)
 
-        return panel
+        scroll_area.setWidget(panel)
+        return scroll_area
 
     def _build_action_bar(self) -> QWidget:
         bar = QWidget()
