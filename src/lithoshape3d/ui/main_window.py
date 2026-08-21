@@ -13,16 +13,19 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsScene,
+    QGraphicsView,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -140,6 +143,62 @@ class AspectRatioImageLabel(QLabel):
         self.setPixmap(scaled)
 
 
+class _ZoomGraphicsView(QGraphicsView):
+    """Vue avec zoom a la molette (centre sous le curseur) et deplacement a
+    la main (drag) -- comportement standard d'un visualiseur d'image."""
+
+    _ZOOM_STEP = 1.15
+    _MIN_SCALE = 0.1
+    _MAX_SCALE = 20.0
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self._scale = 1.0
+
+    def wheelEvent(self, event) -> None:
+        factor = self._ZOOM_STEP if event.angleDelta().y() > 0 else 1.0 / self._ZOOM_STEP
+        new_scale = self._scale * factor
+        if not (self._MIN_SCALE <= new_scale <= self._MAX_SCALE):
+            return
+        self._scale = new_scale
+        self.scale(factor, factor)
+
+
+class ImageZoomDialog(QDialog):
+    """Fenetre de previsualisation zoomable/deplacable -- molette pour
+    zoomer, glisser pour deplacer. Ouverte a la demande (bouton "Zoom" sous
+    l'apercu), jamais automatiquement."""
+
+    def __init__(self, pixmap: QPixmap, title: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(900, 700)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.view = _ZoomGraphicsView()
+        scene = QGraphicsScene(self)
+        scene.addPixmap(pixmap)
+        self.view.setScene(scene)
+        layout.addWidget(self.view)
+
+        hint = QLabel("Molette : zoomer -- glisser : deplacer")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(hint)
+
+        self._scene_rect = scene.itemsBoundingRect()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.view.fitInView(self._scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, plotter=None) -> None:
         super().__init__()
@@ -167,6 +226,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)  # aucun panneau ne doit pouvoir disparaitre a 0px
         splitter.addWidget(self._build_source_panel())
 
         if plotter is None:
@@ -177,6 +237,7 @@ class MainWindow(QMainWindow):
         viewer_widget = getattr(plotter, "interactor", None)
 
         viewer_container = QWidget()
+        viewer_container.setMinimumWidth(240)
         viewer_layout = QVBoxLayout(viewer_container)
         viewer_layout.setContentsMargins(0, 0, 0, 0)
         viewer_layout.setSpacing(4)
@@ -202,7 +263,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([260, 780, 260])
+        splitter.setSizes([260, 740, 320])
         root_layout.addWidget(splitter, 1)
 
         self.scene_viewer = SceneViewer(self.plotter)
@@ -219,6 +280,11 @@ class MainWindow(QMainWindow):
 
         self._load_support_into_panel()
         self._set_state(AppState.NO_IMAGE)
+
+        # Taille minimale globale = somme des minimums des 3 colonnes du
+        # splitter (source/viewer/parametres) : en dessous, un panneau
+        # deviendrait inutilisable quel que soit le partage de l'espace.
+        self.setMinimumSize(800, 500)
 
     def closeEvent(self, event) -> None:
         """Finalise proprement le render window VTK avant que Qt ne detruise
@@ -251,6 +317,11 @@ class MainWindow(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(200, 200)
         layout.addWidget(self.preview_label, 1)
+
+        self.zoom_preview_button = QPushButton("Zoom apercu...")
+        self.zoom_preview_button.setEnabled(False)
+        self.zoom_preview_button.clicked.connect(self._on_zoom_preview_clicked)
+        layout.addWidget(self.zoom_preview_button)
 
         self.filename_label = QLabel("")
         self.filename_label.setWordWrap(True)
@@ -299,7 +370,6 @@ class MainWindow(QMainWindow):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setMinimumWidth(240)
         scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
         self.params_scroll_area = scroll_area
 
@@ -526,6 +596,15 @@ class MainWindow(QMainWindow):
             spin.valueChanged.connect(self._on_support_changed)
 
         scroll_area.setWidget(panel)
+        # Largeur minimale calculee (pas figee en dur) : sans elle, avec
+        # ScrollBarAlwaysOff, un contenu plus large que la colonne allouee
+        # par le splitter est simplement ROGNE (les suffixes " mm"/" mm/px"
+        # des spinbox disparaissent) au lieu de rester lisible -- bug
+        # constate par l'utilisateur juste apres l'ajout du scroll vertical.
+        # On reserve donc explicitement la largeur naturelle du contenu +
+        # celle de la scrollbar verticale (qui grignote sinon le viewport).
+        scrollbar_width = scroll_area.verticalScrollBar().sizeHint().width()
+        scroll_area.setMinimumWidth(panel.minimumSizeHint().width() + scrollbar_width)
         return scroll_area
 
     def _build_action_bar(self) -> QWidget:
@@ -701,12 +780,17 @@ class MainWindow(QMainWindow):
         )
         self.height_display.setText(f"{height_mm:.1f} mm")
 
-    def _update_source_preview(self) -> None:
+    def _render_preview_pixmap(self, preview_width: int) -> QPixmap | None:
+        """Rendu partage entre la vignette inline (320px, cf.
+        `_update_source_preview`) et la fenetre de zoom (haute resolution,
+        cf. `_on_zoom_preview_clicked`) -- meme pipeline (niveaux de gris,
+        luminosite/contraste, inversion, surimpression du masque de la zone
+        active), seule la resolution de sortie change."""
         if not self._image_path:
-            return
+            return None
         image = load_image(self._image_path)
         array = to_grayscale_array(image)
-        preview_width = 320
+        preview_width = min(preview_width, array.shape[1])  # jamais suralonger la source
         preview_height = max(1, round(preview_width * array.shape[0] / array.shape[1]))
         array = resize_array(array, width_px=preview_width, height_px=preview_height)
         array = apply_brightness_contrast(
@@ -720,10 +804,22 @@ class MainWindow(QMainWindow):
         if zone is not None:
             mask_preview = self._zone_mask_at_shape(zone, array.shape)
             index = self._project.scene.zones.index(zone)
-            pixmap = render_overlay(array, mask_preview, zone_color(index), alpha=0.4)
-        else:
-            pixmap = _array_to_pixmap(array)
-        self.preview_label.set_source_pixmap(pixmap)
+            return render_overlay(array, mask_preview, zone_color(index), alpha=0.4)
+        return _array_to_pixmap(array)
+
+    def _update_source_preview(self) -> None:
+        pixmap = self._render_preview_pixmap(320)
+        self.zoom_preview_button.setEnabled(pixmap is not None)
+        if pixmap is not None:
+            self.preview_label.set_source_pixmap(pixmap)
+
+    def _on_zoom_preview_clicked(self) -> None:
+        pixmap = self._render_preview_pixmap(1600)
+        if pixmap is None:
+            return
+        title = Path(self._image_path).name if self._image_path else "Apercu"
+        dialog = ImageZoomDialog(pixmap, f"Apercu - {title}", self)
+        dialog.exec()
 
     # ------------------------------------------------------------------ #
     # Zones
@@ -1224,6 +1320,7 @@ class MainWindow(QMainWindow):
         self.filename_label.setText("")
         self.dimensions_label.setText("")
         self.preview_label.set_source_pixmap(QPixmap())
+        self.zoom_preview_button.setEnabled(False)
         self._refresh_zones_list()
         self._set_state(AppState.NO_IMAGE)
 

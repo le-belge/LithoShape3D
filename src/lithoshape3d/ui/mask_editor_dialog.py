@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from PySide6.QtCore import Qt, QThreadPool, Signal
+from PySide6.QtCore import QPointF, Qt, QThreadPool, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -41,8 +41,16 @@ _POSITIVE_COLOR = QColor(80, 220, 120)
 _NEGATIVE_COLOR = QColor(220, 80, 80)
 
 
+_MIN_SCALE = 0.05
+_MAX_SCALE = 8.0
+"""800% -- borne haute demandee, verifiee stable a l'usage (rendu par
+QPainter.scale, pas de re-echantillonnage manuel a chaque frame)."""
+_WHEEL_ZOOM_STEP = 1.15
+
+
 class _MaskCanvas(QWidget):
     ai_point_added = Signal(float, float, bool)  # x, y (coords image), is_positive
+    zoom_changed = Signal(float)  # facteur d'echelle courant (1.0 = 100%)
 
     def __init__(self, controller: MaskEditController, base_image: np.ndarray, color, parent=None):
         super().__init__(parent)
@@ -57,9 +65,22 @@ class _MaskCanvas(QWidget):
 
         self.setMinimumSize(320, 320)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._painting = False
-        self._draw_origin = (0, 0)
-        self._draw_scale = 1.0
+        self._panning = False
+        self._space_held = False
+        self._pan_last_pos: QPointF | None = None
+
+        # Transform vue (affichage uniquement -- ne modifie jamais l'image,
+        # le masque ni aucune coordonnee persistee) : `_origin` est la
+        # position, en coordonnees widget, du pixel image (0,0) ; `_scale`
+        # est le nombre de pixels widget par pixel image. Coherent avec
+        # event.position() (coordonnees logiques Qt, donc deja HiDPI-safe :
+        # aucun facteur devicePixelRatio a appliquer ici).
+        self._scale = 1.0
+        self._origin = QPointF(0.0, 0.0)
+        self._fit_mode = True
+
         self._pixmap = None
         self.refresh()
 
@@ -76,46 +97,154 @@ class _MaskCanvas(QWidget):
         self.preview_points = points
         self.update()
 
+    # ------------------------------------------------------------------ #
+    # Transform vue : zoom/pan -- affichage seulement, voir docstring plus haut
+    # ------------------------------------------------------------------ #
+    def _fit_scale(self) -> float:
+        rows, cols = self.base_image.shape[:2]
+        if cols <= 0 or rows <= 0 or self.width() <= 0 or self.height() <= 0:
+            return 1.0
+        return min(self.width() / cols, self.height() / rows)
+
+    def zoom_to_fit(self) -> None:
+        self._fit_mode = True
+        self._scale = self._fit_scale()
+        rows, cols = self.base_image.shape[:2]
+        self._origin = QPointF(
+            (self.width() - cols * self._scale) / 2.0,
+            (self.height() - rows * self._scale) / 2.0,
+        )
+        self.zoom_changed.emit(self._scale)
+        self.update()
+
+    def zoom_to_actual_size(self) -> None:
+        self._fit_mode = False
+        self._set_scale_keep_center(1.0)
+
+    def zoom_by_factor(self, factor: float) -> None:
+        """Zoom centre sur le widget (utilise par les boutons +/-)."""
+        self._fit_mode = False
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        self._zoom_around(center, factor)
+
+    def _set_scale_keep_center(self, new_scale: float) -> None:
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        image_at_center = self._widget_to_image_xy(center)
+        new_scale = max(_MIN_SCALE, min(_MAX_SCALE, new_scale))
+        self._scale = new_scale
+        self._origin = QPointF(
+            center.x() - image_at_center[0] * new_scale,
+            center.y() - image_at_center[1] * new_scale,
+        )
+        self.zoom_changed.emit(self._scale)
+        self.update()
+
+    def _zoom_around(self, widget_pos: QPointF, factor: float) -> None:
+        """Zoom qui garde le point image sous `widget_pos` fixe a l'ecran
+        (zoom "vers le curseur", comportement standard d'un visualiseur)."""
+        new_scale = self._scale * factor
+        if not (_MIN_SCALE <= new_scale <= _MAX_SCALE):
+            return
+        image_pt = self._widget_to_image_xy(widget_pos)
+        self._scale = new_scale
+        self._origin = QPointF(
+            widget_pos.x() - image_pt[0] * new_scale,
+            widget_pos.y() - image_pt[1] * new_scale,
+        )
+        self.zoom_changed.emit(self._scale)
+        self.update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._fit_mode:
+            self.zoom_to_fit()
+            return
+        # hors mode "Ajuster" : conserve le point image actuellement au
+        # centre du widget au meme endroit apres redimensionnement, plutot
+        # que de laisser l'origine fixe (qui ferait deriver le contenu).
+        old_size = event.oldSize()
+        if old_size.width() <= 0 or old_size.height() <= 0:
+            return
+        old_center = QPointF(old_size.width() / 2.0, old_size.height() / 2.0)
+        image_at_old_center = self._widget_to_image_xy(old_center)
+        new_center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        self._origin = QPointF(
+            new_center.x() - image_at_old_center[0] * self._scale,
+            new_center.y() - image_at_old_center[1] * self._scale,
+        )
+        self.update()
+
+    def wheelEvent(self, event) -> None:
+        self._fit_mode = False
+        factor = _WHEEL_ZOOM_STEP if event.angleDelta().y() > 0 else 1.0 / _WHEEL_ZOOM_STEP
+        self._zoom_around(event.position(), factor)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_held = True
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_held = False
+            if not self._panning:
+                self.unsetCursor()
+        super().keyReleaseEvent(event)
+
     def paintEvent(self, event) -> None:
         if self._pixmap is None:
             return
-        scaled = self._pixmap.scaled(
-            self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-        x = (self.width() - scaled.width()) // 2
-        y = (self.height() - scaled.height()) // 2
-        self._draw_origin = (x, y)
-        self._draw_scale = scaled.width() / self.base_image.shape[1] if self.base_image.shape[1] else 1.0
         painter = QPainter(self)
-        painter.drawPixmap(x, y, scaled)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.save()
+        painter.translate(self._origin)
+        painter.scale(self._scale, self._scale)
+        painter.drawPixmap(0, 0, self._pixmap)
+        painter.restore()
 
         if self.tool == "ai" and self.preview_points:
             for px, py, is_positive in self.preview_points:
-                wx = x + px * self._draw_scale
-                wy = y + py * self._draw_scale
+                wx = self._origin.x() + px * self._scale
+                wy = self._origin.y() + py * self._scale
                 color = _POSITIVE_COLOR if is_positive else _NEGATIVE_COLOR
                 painter.setPen(QPen(color, 2))
                 painter.setBrush(color)
                 painter.drawEllipse(int(wx) - 4, int(wy) - 4, 8, 8)
 
     def _widget_to_image_xy(self, pos) -> tuple[float, float]:
-        ox, oy = self._draw_origin
-        scale = self._draw_scale or 1.0
-        image_x = (pos.x() - ox) / scale
-        image_y = (pos.y() - oy) / scale
+        """Seul point d'entree pour convertir une position widget (souris,
+        deja en coordonnees logiques Qt) en coordonnees image -- utilise a
+        la fois par le pinceau/gomme et par la selection intelligente, pour
+        garantir qu'ils restent parfaitement synchronises a tout niveau de
+        zoom/pan."""
+        scale = self._scale or 1.0
+        image_x = (pos.x() - self._origin.x()) / scale
+        image_y = (pos.y() - self._origin.y()) / scale
         return image_x, image_y
 
     def _paint_at(self, pos) -> None:
         x, y = self._widget_to_image_xy(pos)
-        radius = max(1, int(self.brush_radius / (self._draw_scale or 1.0)))
+        radius = max(1, round(self.brush_radius / (self._scale or 1.0)))
         value = 1.0 if self.tool == "brush" else 0.0
-        self.controller.paint(int(x), int(y), radius, value)
+        self.controller.paint(round(x), round(y), radius, value)
         self.refresh()
 
+    def _is_pan_trigger(self, event) -> bool:
+        return event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton and self._space_held
+        )
+
     def mousePressEvent(self, event) -> None:
+        if self._is_pan_trigger(event):
+            self._panning = True
+            self._pan_last_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
         if self.tool == "ai":
             if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-                x, y = self._widget_to_image_xy(event.position().toPoint())
+                x, y = self._widget_to_image_xy(event.position())
                 is_negative = (
                     event.button() == Qt.MouseButton.RightButton
                     or bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -126,13 +255,27 @@ class _MaskCanvas(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._painting = True
             self.controller.begin_stroke()
-            self._paint_at(event.position().toPoint())
+            self._paint_at(event.position())
 
     def mouseMoveEvent(self, event) -> None:
+        if self._panning and self._pan_last_pos is not None:
+            delta = event.position() - self._pan_last_pos
+            self._origin += delta
+            self._pan_last_pos = event.position()
+            self.update()
+            return
         if self._painting:
-            self._paint_at(event.position().toPoint())
+            self._paint_at(event.position())
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._panning and self._is_pan_trigger(event):
+            self._panning = False
+            self._pan_last_pos = None
+            if self._space_held:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            else:
+                self.unsetCursor()
+            return
         if self._painting:
             self._painting = False
             self.controller.end_stroke()
@@ -237,6 +380,31 @@ class MaskEditorDialog(QDialog):
         self.ai_toolbar.setVisible(False)
         layout.addWidget(self.ai_toolbar)
 
+        zoom_toolbar = QHBoxLayout()
+        zoom_toolbar.addWidget(QLabel("Zoom"))
+        self.zoom_fit_button = QPushButton("Ajuster")
+        self.zoom_fit_button.clicked.connect(self.canvas.zoom_to_fit)
+        zoom_toolbar.addWidget(self.zoom_fit_button)
+        self.zoom_actual_button = QPushButton("100%")
+        self.zoom_actual_button.clicked.connect(self.canvas.zoom_to_actual_size)
+        zoom_toolbar.addWidget(self.zoom_actual_button)
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setFixedWidth(28)
+        self.zoom_out_button.clicked.connect(lambda: self.canvas.zoom_by_factor(1.0 / 1.25))
+        zoom_toolbar.addWidget(self.zoom_out_button)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(48)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_toolbar.addWidget(self.zoom_label)
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setFixedWidth(28)
+        self.zoom_in_button.clicked.connect(lambda: self.canvas.zoom_by_factor(1.25))
+        zoom_toolbar.addWidget(self.zoom_in_button)
+        zoom_toolbar.addWidget(QLabel("Molette : zoomer -- Espace/clic milieu + glisser : deplacer"))
+        zoom_toolbar.addStretch(1)
+        layout.addLayout(zoom_toolbar)
+        self.canvas.zoom_changed.connect(self._on_zoom_changed)
+
         layout.addWidget(self.canvas, 1)
 
         self.close_button = QPushButton("Fermer")
@@ -265,6 +433,9 @@ class MaskEditorDialog(QDialog):
 
     def _on_size_changed(self, value: int) -> None:
         self.canvas.brush_radius = value
+
+    def _on_zoom_changed(self, scale: float) -> None:
+        self.zoom_label.setText(f"{scale * 100:.0f}%")
 
     def _on_clear(self) -> None:
         self.controller.clear()
