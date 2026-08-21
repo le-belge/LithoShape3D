@@ -5,7 +5,16 @@ Build : `pyinstaller packaging/lithoshape3d.spec --noconfirm` depuis la
 racine du depot (avec le venv actif -- app-full recommande).
 """
 
+import sys
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# source de verite unique pour la version (voir pyproject.toml
+# [tool.hatch.version]) -- evite de figer un numero en dur ici, qui avait
+# cause le hotfix 0.3.1 (bundle affichant encore l'ancienne version).
+sys.path.insert(0, str(Path(SPECPATH).parent / "src"))
+from lithoshape3d import __version__ as APP_VERSION
 
 block_cipher = None
 
@@ -59,7 +68,7 @@ app = BUNDLE(
     icon=None,
     bundle_identifier="com.lithoshape3d.app",
     info_plist={
-        "CFBundleShortVersionString": "0.3.0",
+        "CFBundleShortVersionString": APP_VERSION,
         "NSHighResolutionCapable": True,
     },
 )
