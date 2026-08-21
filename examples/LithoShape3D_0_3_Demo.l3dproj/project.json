@@ -1,0 +1,160 @@
+{
+  "format_version": 4,
+  "name": "untitled",
+  "scene": {
+    "zones": [
+      {
+        "id": "25377bd6-893f-47fe-a926-73a673715abe",
+        "name": "Blanc",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": null,
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.8,
+          "max_thickness_mm": 3.0,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "Blanc",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "filament_type": null,
+          "translucent": false,
+          "slot": null
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "lithophane",
+        "composition_mode": "base",
+        "mesh_cache_path": null
+      },
+      {
+        "id": "90b6a265-4623-4dd5-bcba-edf34529cf5c",
+        "name": "Rose",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": "masks/90b6a265-4623-4dd5-bcba-edf34529cf5c.png",
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.8,
+          "max_thickness_mm": 3.0,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "Rose",
+          "color": [
+            0.85,
+            0.25,
+            0.45
+          ],
+          "filament_type": "PLA",
+          "translucent": false,
+          "slot": null
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "lithophane",
+        "composition_mode": "replace",
+        "mesh_cache_path": null
+      },
+      {
+        "id": "1952218f-7ece-480a-a116-831166cc64d4",
+        "name": "Texte",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": "masks/1952218f-7ece-480a-a116-831166cc64d4.png",
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 1.0,
+          "max_thickness_mm": 1.0,
+          "invert": false,
+          "resolution": 0.3,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "Noir",
+          "color": [
+            0.08,
+            0.08,
+            0.08
+          ],
+          "filament_type": null,
+          "translucent": false,
+          "slot": null
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "solid",
+        "composition_mode": "add",
+        "mesh_cache_path": null
+      }
+    ],
+    "source_image_path": "source/demo_woman_rose_0_3.png",
+    "active_zone_id": "1952218f-7ece-480a-a116-831166cc64d4",
+    "support": {
+      "support_type": "flat",
+      "depth_mm": 25.0,
+      "height_mm": 10.0,
+      "overhang_left_mm": 5.0,
+      "overhang_right_mm": 5.0,
+      "rib_count": 3,
+      "rib_thickness_mm": 2.0
+    }
+  }
+}

@@ -41,7 +41,7 @@ _V2_MULTI_ZONE = {
 def test_v2_migration_sets_first_zone_to_base():
     project = project_from_dict(copy.deepcopy(_V2_MULTI_ZONE))
 
-    assert project.format_version == 3
+    assert project.format_version == 4  # migration chainee v2 -> v3 -> v4
     assert project.scene.zones[0].composition_mode.value == "base"
 
 

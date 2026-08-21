@@ -39,10 +39,45 @@ class Transform:
 
 @dataclass
 class Material:
+    """Materiau/filament logique d'une Zone -- pour l'impression, pas pour le
+    relief. Volontairement minimal (v0.3) : pas de base de donnees de
+    filaments, juste de quoi partitionner la geometrie finale par materiau et
+    l'exporter/l'afficher correctement. `name` sert de cle de regroupement
+    (deux zones portant le meme `name` fusionnent en un seul corps exporte)."""
+
     name: str = "default"
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
     filament_type: str | None = None
     translucent: bool = False
+    slot: int | None = None
+    """Index logique de slot filament (ex. position AMS) -- purement informatif
+    cote LithoShape3D, l'affectation reelle se fait dans le slicer."""
+
+
+class SupportType(Enum):
+    NONE = "none"
+    FLAT = "flat"
+    REINFORCED = "reinforced"
+
+
+@dataclass
+class PrintSupport:
+    """Pied/support imprime fusionne au modele pour le stabiliser sur le
+    plateau (PAS un support de surplomb type slicer -- voir
+    core/geometry/support.py). S'applique au resultat compose dans son
+    ensemble, pas a une Zone individuelle."""
+
+    support_type: SupportType = SupportType.NONE
+    depth_mm: float = 25.0
+    """Profondeur (etendue en Z) du pied -- volontairement bien plus grande
+    que l'epaisseur fine de la lithophanie, pour donner une base stable."""
+    height_mm: float = 8.0
+    """Hauteur (etendue en Y) du pied, sous le bord bas du panneau."""
+    overhang_left_mm: float = 5.0
+    overhang_right_mm: float = 5.0
+    rib_count: int = 3
+    """Nombre de renforts/goussets -- utilise seulement si REINFORCED."""
+    rib_thickness_mm: float = 2.0
 
 
 @dataclass
@@ -85,10 +120,11 @@ class Scene:
     source_image_path: str | None = None
     """Image partagee par le workflow classique 1 image -> plusieurs zones."""
     active_zone_id: str | None = None
+    support: PrintSupport = field(default_factory=PrintSupport)
 
 
 @dataclass
 class Project:
     name: str = "untitled"
     scene: Scene = field(default_factory=Scene)
-    format_version: int = 3
+    format_version: int = 4

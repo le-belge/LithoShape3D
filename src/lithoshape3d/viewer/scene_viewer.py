@@ -53,6 +53,10 @@ class DisplayMode(Enum):
     WIREFRAME = "wireframe"
     SURFACE_WITH_EDGES = "surface_with_edges"
     BACKLIGHT_PREVIEW = "backlight_preview"
+    MATERIALS = "materials"
+    """Ce mode ne passe pas par `show_mesh` (il montre plusieurs corps, pas
+    un seul) -- voir `SceneViewer.show_material_meshes`. Reste dans cette
+    enum pour partager le meme combo d'affichage cote UI."""
 
 
 def _add_mesh_kwargs(display_mode: DisplayMode) -> dict:
@@ -63,7 +67,7 @@ def _add_mesh_kwargs(display_mode: DisplayMode) -> dict:
     return {"style": "surface", "show_edges": False, "color": MESH_COLOR}
 
 
-def _backlight_brightness_from_z(points: np.ndarray) -> np.ndarray:
+def _backlight_brightness_from_z(points: np.ndarray, z_max_override: float | None = None) -> np.ndarray:
     """Approxime la luminosite transmise par sommet a partir de l'epaisseur
     locale, comme une lithophanie photographiee retro-eclairee.
 
@@ -73,6 +77,14 @@ def _backlight_brightness_from_z(points: np.ndarray) -> np.ndarray:
     parois laterales ne portent que les valeurs 0 ou epaisseur). Attenuation
     de type Beer-Lambert (exponentielle) : fin = lumineux, epais = sombre.
 
+    `z_max_override` : quand un pied d'impression est fusionne au modele, sa
+    propre profondeur (souvent bien plus grande que l'epaisseur fine de la
+    lithophanie, cf. core/geometry/support.py) fausserait la normalisation si
+    elle etait recalculee sur le mesh complet -- on passe alors l'epaisseur
+    max du panneau SEUL (avant fusion du pied), ce qui a pour effet
+    secondaire voulu de rendre le pied uniformement tres sombre (il n'est pas
+    cense faire partie de l'image retro-eclairee).
+
     Volontairement un mappage epaisseur -> couleur (pas une vraie
     transparence alpha) : avec un vrai blending alpha sur fond sombre, une
     zone fine se fond vers le fond NOIR (donc s'assombrit) au lieu de
@@ -80,10 +92,11 @@ def _backlight_brightness_from_z(points: np.ndarray) -> np.ndarray:
     reproduit fidelement ce que montre une vraie photo retro-eclairee, quel
     que soit l'angle de vue en orbite."""
     z = points[:, 2]
-    z_min, z_max = float(z.min()), float(z.max())
+    z_min = 0.0  # convention : le dos est toujours a Z=0
+    z_max = z_max_override if z_max_override is not None else float(z.max())
     if z_max - z_min < 1e-9:
         return np.full(len(z), 0.5)
-    normalized = (z - z_min) / (z_max - z_min)
+    normalized = np.clip((z - z_min) / (z_max - z_min), 0.0, None)
     attenuated = np.exp(-_BACKLIGHT_ATTENUATION_K * normalized)
     return _BACKLIGHT_BRIGHTNESS_FLOOR + attenuated * (1.0 - _BACKLIGHT_BRIGHTNESS_FLOOR)
 
@@ -92,21 +105,63 @@ class SceneViewer:
     def __init__(self, plotter) -> None:
         self.plotter = plotter
         self._mesh_actor = None
+        self._material_actors: list = []
         self.plotter.set_background(BACKGROUND_COLOR)
         try:
             self.plotter.enable_anti_aliasing("msaa")
         except (AttributeError, RuntimeError, ValueError):
             pass  # non bloquant : selon le backend/l'environnement de rendu
 
-    def show_mesh(self, mesh: trimesh.Trimesh, display_mode: DisplayMode = DisplayMode.SURFACE) -> None:
-        """Affiche exactement le mesh fourni (aucune reparation, aucun recalcul)."""
+    def _clear_actors(self) -> None:
         if self._mesh_actor is not None:
             self.plotter.remove_actor(self._mesh_actor)
+            self._mesh_actor = None
+        for actor in self._material_actors:
+            self.plotter.remove_actor(actor)
+        self._material_actors = []
+
+    def show_mesh(
+        self,
+        mesh: trimesh.Trimesh,
+        display_mode: DisplayMode = DisplayMode.SURFACE,
+        panel_z_max: float | None = None,
+    ) -> None:
+        """Affiche exactement le mesh fourni (aucune reparation, aucun recalcul).
+
+        `panel_z_max` : voir `_backlight_brightness_from_z` -- ignore hors
+        mode BACKLIGHT_PREVIEW."""
+        self._clear_actors()
 
         if display_mode is DisplayMode.BACKLIGHT_PREVIEW:
-            self._show_backlight_preview(mesh)
+            self._show_backlight_preview(mesh, panel_z_max)
         else:
             self._show_normal(mesh, display_mode)
+
+        self.plotter.reset_camera()
+
+    def show_material_meshes(
+        self, material_meshes: dict[str, tuple[trimesh.Trimesh, tuple[float, float, float]]]
+    ) -> None:
+        """Affiche plusieurs corps simultanement, chacun dans sa couleur
+        logique -- pour verifier visuellement la repartition des materiaux,
+        pas pour simuler precisement un rendu de filament reel."""
+        self._clear_actors()
+        self.plotter.set_background(BACKGROUND_COLOR)
+        self.plotter.remove_all_lights()
+        self.plotter.enable_lightkit()
+
+        for mesh, color in material_meshes.values():
+            polydata = mesh_to_polydata(mesh)
+            actor = self.plotter.add_mesh(
+                polydata,
+                style="surface",
+                show_edges=False,
+                color=color,
+                smooth_shading=True,
+                specular=0.3,
+                specular_power=15,
+            )
+            self._material_actors.append(actor)
 
         self.plotter.reset_camera()
 
@@ -124,7 +179,7 @@ class SceneViewer:
             **_add_mesh_kwargs(display_mode),
         )
 
-    def _show_backlight_preview(self, mesh: trimesh.Trimesh) -> None:
+    def _show_backlight_preview(self, mesh: trimesh.Trimesh, panel_z_max: float | None = None) -> None:
         """Approxime le rendu d'une lithophanie retro-eclairee, photographiee
         avec une lumiere derriere : la luminosite de chaque sommet est
         derivee de l'epaisseur locale (voir `_backlight_brightness_from_z`)
@@ -139,7 +194,7 @@ class SceneViewer:
         self.plotter.enable_lightkit()
 
         polydata = mesh_to_polydata(mesh)
-        polydata["brightness"] = _backlight_brightness_from_z(polydata.points)
+        polydata["brightness"] = _backlight_brightness_from_z(polydata.points, panel_z_max)
         cmap = LinearSegmentedColormap.from_list(
             "litho_backlight", [BACKLIGHT_DARK_COLOR, BACKLIGHT_BRIGHT_COLOR]
         )

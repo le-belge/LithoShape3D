@@ -43,7 +43,7 @@ def test_roundtrip_dict():
 def test_serialized_dict_carries_format_version():
     data = project_to_dict(_sample_project())
 
-    assert data["format_version"] == 3
+    assert data["format_version"] == 4
 
 
 def test_roundtrip_file(tmp_path):

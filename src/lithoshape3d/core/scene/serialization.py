@@ -16,14 +16,16 @@ from lithoshape3d.core.scene.models import (
     CompositionMode,
     GeometryParameters,
     Material,
+    PrintSupport,
     Project,
     ReliefMode,
     Scene,
+    SupportType,
     Transform,
     Zone,
 )
 
-CURRENT_FORMAT_VERSION = 3
+CURRENT_FORMAT_VERSION = 4
 
 
 def _transform_to_dict(transform: Transform) -> dict[str, Any]:
@@ -48,6 +50,7 @@ def _material_to_dict(material: Material) -> dict[str, Any]:
         "color": list(material.color),
         "filament_type": material.filament_type,
         "translucent": material.translucent,
+        "slot": material.slot,
     }
 
 
@@ -57,6 +60,31 @@ def _material_from_dict(data: dict[str, Any]) -> Material:
         color=tuple(data.get("color", (1.0, 1.0, 1.0))),
         filament_type=data.get("filament_type"),
         translucent=data.get("translucent", False),
+        slot=data.get("slot"),
+    )
+
+
+def _support_to_dict(support: PrintSupport) -> dict[str, Any]:
+    return {
+        "support_type": support.support_type.value,
+        "depth_mm": support.depth_mm,
+        "height_mm": support.height_mm,
+        "overhang_left_mm": support.overhang_left_mm,
+        "overhang_right_mm": support.overhang_right_mm,
+        "rib_count": support.rib_count,
+        "rib_thickness_mm": support.rib_thickness_mm,
+    }
+
+
+def _support_from_dict(data: dict[str, Any]) -> PrintSupport:
+    return PrintSupport(
+        support_type=SupportType(data.get("support_type", SupportType.NONE.value)),
+        depth_mm=data.get("depth_mm", 25.0),
+        height_mm=data.get("height_mm", 8.0),
+        overhang_left_mm=data.get("overhang_left_mm", 5.0),
+        overhang_right_mm=data.get("overhang_right_mm", 5.0),
+        rib_count=data.get("rib_count", 3),
+        rib_thickness_mm=data.get("rib_thickness_mm", 2.0),
     )
 
 
@@ -124,6 +152,7 @@ def project_to_dict(project: Project) -> dict[str, Any]:
             "zones": [_zone_to_dict(zone) for zone in project.scene.zones],
             "source_image_path": project.scene.source_image_path,
             "active_zone_id": project.scene.active_zone_id,
+            "support": _support_to_dict(project.scene.support),
         },
     }
 
@@ -184,9 +213,23 @@ def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """Migration additive : ajoute Zone.material.slot et Scene.support.
+
+    Purement additive -- `_material_from_dict`/`_support_from_dict` savent
+    deja fournir des valeurs par defaut sures pour ces champs absents, cette
+    migration existe surtout pour documenter explicitement le saut de
+    version (introduction des materiaux/supports d'impression en v0.3) plutot
+    que de laisser un projet v3 silencieusement "passer" pour v4."""
+    data.setdefault("scene", {}).setdefault("support", {"support_type": SupportType.NONE.value})
+    data["format_version"] = 4
+    return data
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 
@@ -215,6 +258,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
             zones=zones,
             source_image_path=data["scene"].get("source_image_path"),
             active_zone_id=active_zone_id,
+            support=_support_from_dict(data["scene"].get("support", {})),
         ),
         format_version=format_version,
     )

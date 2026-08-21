@@ -13,11 +13,12 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -25,20 +26,28 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from lithoshape3d.core.export.multi_material_export import (
+    export_multi_material_3mf,
+    export_stl_per_material,
+)
 from lithoshape3d.core.export.stl_export import export_stl
 from lithoshape3d.core.geometry.composition import ZoneSource
 from lithoshape3d.core.geometry.heightmap import height_mm_from_aspect_ratio
+from lithoshape3d.core.geometry.materials import partition_mesh_by_material
+from lithoshape3d.core.geometry.support import build_support_mesh
 from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import image_size
 from lithoshape3d.core.image.preprocessing import (
@@ -53,6 +62,7 @@ from lithoshape3d.core.scene.models import (
     GeometryParameters,
     Project,
     ReliefMode,
+    SupportType,
     Zone,
 )
 from lithoshape3d.core.scene.project_io import load_project_bundle, save_project_bundle
@@ -145,6 +155,8 @@ class MainWindow(QMainWindow):
         self._image_width_px = 0
         self._image_height_px = 0
         self._current_mesh = None
+        self._current_panel_z_max: float | None = None
+        self._current_material_meshes: dict[str, object] | None = None
         self._state = AppState.NO_IMAGE
         self._thread_pool = QThreadPool.globalInstance()
         self._segmentation_backend = _create_segmentation_backend()
@@ -204,6 +216,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximumWidth(160)
         self.statusBar().addPermanentWidget(self.progress_bar)
 
+        self._load_support_into_panel()
         self._set_state(AppState.NO_IMAGE)
 
     def closeEvent(self, event) -> None:
@@ -307,6 +320,32 @@ class MainWindow(QMainWindow):
         composition_form.addRow("Mode", self.composition_mode_combo)
         layout.addWidget(composition_group)
 
+        material_group = QGroupBox("Materiau (impression)")
+        material_form = QFormLayout(material_group)
+        material_form.setSpacing(8)
+
+        self.material_name_edit = QLineEdit()
+        self.material_name_edit.setPlaceholderText("ex. Blanc, Rose...")
+        material_form.addRow("Nom", self.material_name_edit)
+
+        self.material_color_button = QPushButton()
+        self.material_color_button.setFixedWidth(60)
+        self.material_color_button.clicked.connect(self._on_pick_material_color)
+        material_form.addRow("Couleur", self.material_color_button)
+
+        self.material_filament_combo = QComboBox()
+        self.material_filament_combo.addItem("(non specifie)", None)
+        for filament_type in ("PLA", "PETG", "TPU", "Autre"):
+            self.material_filament_combo.addItem(filament_type, filament_type)
+        material_form.addRow("Type", self.material_filament_combo)
+
+        self.material_slot_spin = QSpinBox()
+        self.material_slot_spin.setRange(-1, 15)
+        self.material_slot_spin.setSpecialValueText("Aucun")
+        material_form.addRow("Slot filament", self.material_slot_spin)
+
+        layout.addWidget(material_group)
+
         geometry_group = QGroupBox("Geometrie")
         geometry_form = QFormLayout(geometry_group)
         geometry_form.setSpacing(8)
@@ -364,6 +403,42 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(image_group)
 
+        support_group = QGroupBox("Support d'impression")
+        support_form = QFormLayout(support_group)
+        support_form.setSpacing(8)
+
+        self.support_type_combo = QComboBox()
+        self.support_type_combo.addItem("Aucun", SupportType.NONE)
+        self.support_type_combo.addItem("Pied plat", SupportType.FLAT)
+        self.support_type_combo.addItem("Pied renforce", SupportType.REINFORCED)
+        support_form.addRow("Type", self.support_type_combo)
+
+        self.support_height_spin = QDoubleSpinBox()
+        self.support_height_spin.setRange(2.0, 60.0)
+        self.support_height_spin.setSuffix(" mm")
+        self.support_height_spin.setValue(8.0)
+        support_form.addRow("Hauteur du pied", self.support_height_spin)
+
+        self.support_depth_spin = QDoubleSpinBox()
+        self.support_depth_spin.setRange(5.0, 100.0)
+        self.support_depth_spin.setSuffix(" mm")
+        self.support_depth_spin.setValue(25.0)
+        support_form.addRow("Profondeur du pied", self.support_depth_spin)
+
+        self.support_overhang_left_spin = QDoubleSpinBox()
+        self.support_overhang_left_spin.setRange(0.0, 50.0)
+        self.support_overhang_left_spin.setSuffix(" mm")
+        self.support_overhang_left_spin.setValue(5.0)
+        support_form.addRow("Debord gauche", self.support_overhang_left_spin)
+
+        self.support_overhang_right_spin = QDoubleSpinBox()
+        self.support_overhang_right_spin.setRange(0.0, 50.0)
+        self.support_overhang_right_spin.setSuffix(" mm")
+        self.support_overhang_right_spin.setValue(5.0)
+        support_form.addRow("Debord droit", self.support_overhang_right_spin)
+
+        layout.addWidget(support_group)
+
         display_group = QGroupBox("Affichage")
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(8)
@@ -388,6 +463,7 @@ class MainWindow(QMainWindow):
         self.display_mode_combo.addItem("Fil de fer", DisplayMode.WIREFRAME)
         self.display_mode_combo.addItem("Surface + aretes", DisplayMode.SURFACE_WITH_EDGES)
         self.display_mode_combo.addItem("Apercu retro-eclaire", DisplayMode.BACKLIGHT_PREVIEW)
+        self.display_mode_combo.addItem("Materiaux", DisplayMode.MATERIALS)
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.display_mode_combo)
 
@@ -423,6 +499,17 @@ class MainWindow(QMainWindow):
         self.invert_checkbox.toggled.connect(self._update_source_preview)
         self.relief_mode_combo.currentIndexChanged.connect(self._on_zone_role_changed)
         self.composition_mode_combo.currentIndexChanged.connect(self._on_zone_role_changed)
+        self.material_name_edit.editingFinished.connect(self._on_material_changed)
+        self.material_filament_combo.currentIndexChanged.connect(self._on_material_changed)
+        self.material_slot_spin.valueChanged.connect(self._on_material_changed)
+        self.support_type_combo.currentIndexChanged.connect(self._on_support_changed)
+        for spin in (
+            self.support_height_spin,
+            self.support_depth_spin,
+            self.support_overhang_left_spin,
+            self.support_overhang_right_spin,
+        ):
+            spin.valueChanged.connect(self._on_support_changed)
 
         return panel
 
@@ -438,6 +525,10 @@ class MainWindow(QMainWindow):
         self.export_button = QPushButton("Exporter STL...")
         self.export_button.clicked.connect(self._on_export_clicked)
         layout.addWidget(self.export_button)
+
+        self.export_multi_material_button = QPushButton("Exporter multi-materiaux...")
+        self.export_multi_material_button.clicked.connect(self._on_export_multi_material_clicked)
+        layout.addWidget(self.export_multi_material_button)
 
         self.reset_button = QPushButton("Reset parametres")
         self.reset_button.clicked.connect(self._on_reset_clicked)
@@ -518,6 +609,7 @@ class MainWindow(QMainWindow):
         self.generate_action.setEnabled(can_generate)
         self.export_button.setEnabled(can_export)
         self.export_action.setEnabled(can_export)
+        self.export_multi_material_button.setEnabled(can_export)
         self.open_button.setEnabled(not generating)
         self.open_action.setEnabled(not generating)
         self.reset_button.setEnabled(not generating)
@@ -577,7 +669,7 @@ class MainWindow(QMainWindow):
         self._current_mesh = None
         self._project.scene.source_image_path = path
 
-        self.filename_label.setText(path.rsplit("/", 1)[-1])
+        self.filename_label.setText(Path(path).name)
         self.dimensions_label.setText(f"{width_px} x {height_px} px")
 
         self._ensure_default_zone()
@@ -702,6 +794,7 @@ class MainWindow(QMainWindow):
         self.zones_list.blockSignals(False)
 
         self._load_zone_params_into_panel(self._active_zone())
+        self._load_support_into_panel()
         self._update_source_preview()
         self._set_state(self._state)  # rafraichit l'activation des boutons zones
 
@@ -723,7 +816,23 @@ class MainWindow(QMainWindow):
         self._set_combo_data(self.composition_mode_combo, zone.composition_mode)
         self.relief_mode_combo.blockSignals(False)
         self.composition_mode_combo.blockSignals(False)
+
+        self.material_name_edit.blockSignals(True)
+        self.material_filament_combo.blockSignals(True)
+        self.material_slot_spin.blockSignals(True)
+        self.material_name_edit.setText(zone.material.name)
+        self._set_combo_data(self.material_filament_combo, zone.material.filament_type)
+        self.material_slot_spin.setValue(zone.material.slot if zone.material.slot is not None else -1)
+        self.material_name_edit.blockSignals(False)
+        self.material_filament_combo.blockSignals(False)
+        self.material_slot_spin.blockSignals(False)
+        self._update_material_color_button(zone.material.color)
+
         self._update_height_display()
+
+    def _update_material_color_button(self, color: tuple[float, float, float]) -> None:
+        qcolor = QColor.fromRgbF(*color)
+        self.material_color_button.setStyleSheet(f"background-color: {qcolor.name()};")
 
     @staticmethod
     def _set_combo_data(combo: QComboBox, value: object) -> None:
@@ -742,6 +851,70 @@ class MainWindow(QMainWindow):
             self._set_state(AppState.PARAMS_DIRTY)
         elif self._state is AppState.ERROR:
             self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
+
+    def _on_pick_material_color(self) -> None:
+        zone = self._active_zone()
+        if zone is None:
+            return
+        initial = QColor.fromRgbF(*zone.material.color)
+        chosen = QColorDialog.getColor(initial, self, "Couleur du materiau")
+        if not chosen.isValid():
+            return
+        zone.material.color = (chosen.redF(), chosen.greenF(), chosen.blueF())
+        self._update_material_color_button(zone.material.color)
+        self._current_material_meshes = None
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+
+    def _on_material_changed(self, *_args) -> None:
+        zone = self._active_zone()
+        if zone is None:
+            return
+        zone.material.name = self.material_name_edit.text().strip() or "default"
+        zone.material.filament_type = self.material_filament_combo.currentData()
+        slot_value = self.material_slot_spin.value()
+        zone.material.slot = None if slot_value < 0 else slot_value
+        self._current_material_meshes = None
+
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+        elif self._state is AppState.ERROR:
+            self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
+
+    def _load_support_into_panel(self) -> None:
+        support = self._project.scene.support
+        for widget in (
+            self.support_type_combo,
+            self.support_height_spin,
+            self.support_depth_spin,
+            self.support_overhang_left_spin,
+            self.support_overhang_right_spin,
+        ):
+            widget.blockSignals(True)
+        self._set_combo_data(self.support_type_combo, support.support_type)
+        self.support_height_spin.setValue(support.height_mm)
+        self.support_depth_spin.setValue(support.depth_mm)
+        self.support_overhang_left_spin.setValue(support.overhang_left_mm)
+        self.support_overhang_right_spin.setValue(support.overhang_right_mm)
+        for widget in (
+            self.support_type_combo,
+            self.support_height_spin,
+            self.support_depth_spin,
+            self.support_overhang_left_spin,
+            self.support_overhang_right_spin,
+        ):
+            widget.blockSignals(False)
+
+    def _on_support_changed(self, *_args) -> None:
+        support = self._project.scene.support
+        support.support_type = self.support_type_combo.currentData()
+        support.height_mm = self.support_height_spin.value()
+        support.depth_mm = self.support_depth_spin.value()
+        support.overhang_left_mm = self.support_overhang_left_spin.value()
+        support.overhang_right_mm = self.support_overhang_right_spin.value()
+
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
 
     def _on_zone_selection_changed(self) -> None:
         item = self.zones_list.currentItem()
@@ -858,7 +1031,8 @@ class MainWindow(QMainWindow):
             return
 
         if self.view_composition_button.isChecked():
-            worker = CompositionWorker(self._build_zone_sources())
+            worker = CompositionWorker(self._build_zone_sources(), support=self._project.scene.support)
+            worker.signals.succeeded.connect(self._on_composition_succeeded)
         else:
             zone = self._active_zone()
             params = self._current_geometry_parameters()
@@ -870,8 +1044,8 @@ class MainWindow(QMainWindow):
                 contrast=self.contrast_spin.value(),
                 mask=mask,
             )
+            worker.signals.succeeded.connect(self._on_generation_succeeded)
 
-        worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)
 
         self._set_state(AppState.GENERATING)
@@ -879,34 +1053,82 @@ class MainWindow(QMainWindow):
 
     def _on_generation_succeeded(self, mesh) -> None:
         self._current_mesh = mesh
-        self.scene_viewer.show_mesh(mesh, display_mode=self.display_mode_combo.currentData())
+        self._current_panel_z_max = None  # pas de pied concevable hors composition
+        self._current_material_meshes = None
+        self._render_current_display_mode()
+        self.scene_viewer.view_isometric()
+        self._set_state(AppState.MESH_READY)
+
+    def _on_composition_succeeded(self, mesh, panel_z_max: float) -> None:
+        self._current_mesh = mesh
+        self._current_panel_z_max = panel_z_max
+        self._current_material_meshes = None
+        self._render_current_display_mode()
         self.scene_viewer.view_isometric()
         self._set_state(AppState.MESH_READY)
 
     def _on_generation_failed(self, message: str) -> None:
         self._current_mesh = None
+        self._current_panel_z_max = None
+        self._current_material_meshes = None
         self._set_state(AppState.ERROR)
         QMessageBox.warning(self, "LithoShape3D", f"La generation a echoue :\n{message}")
 
     def _on_display_mode_changed(self) -> None:
         if self._current_mesh is not None:
+            self._render_current_display_mode()
+
+    def _render_current_display_mode(self) -> None:
+        mode = self.display_mode_combo.currentData()
+        if mode is DisplayMode.MATERIALS:
+            self.scene_viewer.show_material_meshes(self._materials_for_display())
+        else:
             self.scene_viewer.show_mesh(
-                self._current_mesh, display_mode=self.display_mode_combo.currentData()
+                self._current_mesh, display_mode=mode, panel_z_max=self._current_panel_z_max
             )
+
+    def _materials_for_display(self) -> dict[str, tuple[object, tuple[float, float, float]]]:
+        if self._current_material_meshes is None:
+            try:
+                self._current_material_meshes = partition_mesh_by_material(self._build_zone_sources())
+            except (ValueError, NotImplementedError) as exc:
+                logger.warning("Partition par materiau indisponible : %s", exc)
+                self._current_material_meshes = {}
+
+        color_by_material: dict[str, tuple[float, float, float]] = {}
+        for zone in self._project.scene.zones:
+            color_by_material.setdefault(zone.material.name, zone.material.color)
+
+        result = {
+            name: (mesh, color_by_material.get(name, (0.85, 0.85, 0.85)))
+            for name, mesh in self._current_material_meshes.items()
+        }
+
+        support = self._project.scene.support
+        base_zone = next(
+            (z for z in self._project.scene.zones if z.composition_mode == CompositionMode.BASE),
+            self._project.scene.zones[0] if self._project.scene.zones else None,
+        )
+        if support.support_type is not SupportType.NONE and base_zone is not None:
+            support_mesh = build_support_mesh(base_zone.geometry_params.width_mm, support)
+            if support_mesh is not None:
+                result["Support"] = (support_mesh, (0.5, 0.5, 0.5))
+        return result
 
     # ------------------------------------------------------------------ #
     # Export
     # ------------------------------------------------------------------ #
-    def _suggested_stl_filename(self) -> str:
-        def _slug(text: str) -> str:
-            cleaned = "".join(c if c.isalnum() else "-" for c in text.strip())
-            cleaned = "-".join(filter(None, cleaned.split("-")))
-            return cleaned or "sans-titre"
+    @staticmethod
+    def _slugify(text: str) -> str:
+        cleaned = "".join(c if c.isalnum() else "-" for c in text.strip())
+        cleaned = "-".join(filter(None, cleaned.split("-")))
+        return cleaned or "sans-titre"
 
-        project_name = _slug(self._project.name)
+    def _suggested_stl_filename(self) -> str:
+        project_name = self._slugify(self._project.name)
         zone = self._active_zone()
         if zone is not None:
-            return f"{project_name}_{_slug(zone.name)}.stl"
+            return f"{project_name}_{self._slugify(zone.name)}.stl"
         return f"{project_name}.stl"
 
     def _on_export_clicked(self) -> None:
@@ -928,6 +1150,49 @@ class MainWindow(QMainWindow):
         logger.info("STL exporte : %s", path)
         self.statusBar().showMessage(f"Export reussi : {path}", 8000)
         QMessageBox.information(self, "LithoShape3D", f"STL exporte avec succes :\n{path}")
+
+    def _on_export_multi_material_clicked(self) -> None:
+        """3MF standard multi-objets en priorite (voir
+        core/export/multi_material_export.py) ; repli propre sur un STL par
+        materiau, tous alignes dans le meme repere, si le 3MF echoue."""
+        if self._state is not AppState.MESH_READY or self._current_mesh is None:
+            return
+
+        materials = self._materials_for_display()
+        material_meshes = {name: mesh for name, (mesh, _color) in materials.items()}
+        if len(material_meshes) <= 1:
+            QMessageBox.information(
+                self, "LithoShape3D", "Un seul materiau utilise : l'export STL standard suffit."
+            )
+            return
+
+        base_name = self._slugify(self._project.name)
+        suggested_name = f"{base_name}.3mf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter multi-materiaux (3MF)", suggested_name, "3MF (*.3mf)"
+        )
+        if not path:
+            return
+
+        try:
+            export_multi_material_3mf(material_meshes, path)
+        except Exception as exc:  # noqa: BLE001 -- n'importe quel echec du 3MF doit declencher le repli STL
+            logger.warning("Export 3MF multi-objets echoue, repli sur STL par materiau : %s", exc)
+            directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL par materiau")
+            if not directory:
+                return
+            written = export_stl_per_material(material_meshes, directory, base_name=base_name)
+            names = "\n".join(str(p) for p in written)
+            QMessageBox.information(
+                self,
+                "LithoShape3D",
+                f"Export 3MF indisponible ({exc}), repli sur un STL par materiau :\n{names}",
+            )
+            return
+
+        logger.info("3MF multi-objets exporte : %s", path)
+        self.statusBar().showMessage(f"Export multi-materiaux reussi : {path}", 8000)
+        QMessageBox.information(self, "LithoShape3D", f"3MF multi-objets exporte avec succes :\n{path}")
 
     # ------------------------------------------------------------------ #
     # Projet

@@ -1,6 +1,6 @@
 [project]
 name = "lithoshape3d"
-version = "0.2.0"
+version = "0.3.0"
 description = "Generateur de lithophanies et reliefs 3D a partir d'images"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,6 +11,8 @@ dependencies = [
     "trimesh>=4.0",
     "manifold3d>=2.5",
     "scipy>=1.11",
+    "lxml>=5.0",
+    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]

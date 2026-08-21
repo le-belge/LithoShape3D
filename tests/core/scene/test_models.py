@@ -4,7 +4,7 @@ from lithoshape3d.core.scene import GeometryParameters, Project, Scene, Zone
 def test_project_default_format_version():
     project = Project()
 
-    assert project.format_version == 3
+    assert project.format_version == 4
     assert isinstance(project.scene, Scene)
     assert project.scene.zones == []
 

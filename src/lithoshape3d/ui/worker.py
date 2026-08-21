@@ -16,8 +16,9 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 from lithoshape3d.core.geometry.composition import ZoneSource, compose_scene_mesh
 from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
 from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
+from lithoshape3d.core.geometry.support import attach_support
 from lithoshape3d.core.image.preprocessing import resize_array
-from lithoshape3d.core.scene.models import GeometryParameters
+from lithoshape3d.core.scene.models import GeometryParameters, PrintSupport, SupportType
 from lithoshape3d.core.validation.mesh_checks import validate_mesh
 
 logger = logging.getLogger("lithoshape3d.worker")
@@ -83,19 +84,35 @@ class GenerationWorker(QRunnable):
         self.signals.finished.emit()
 
 
+class CompositionSignals(QObject):
+    succeeded = Signal(object, float)  # trimesh.Trimesh, panel_z_max (avant fusion du pied)
+    failed = Signal(str)
+    finished = Signal()
+
+
 class CompositionWorker(QRunnable):
     """Genere le mesh compose (toutes les zones visibles, dans l'ordre
-    Scene.zones) en arriere-plan. Meme discipline que GenerationWorker :
-    aucun widget touche, resultats uniquement via signaux."""
+    Scene.zones) en arriere-plan, puis y fusionne le pied d'impression le cas
+    echeant. Meme discipline que GenerationWorker : aucun widget touche,
+    resultats uniquement via signaux."""
 
-    def __init__(self, zone_sources: list[ZoneSource]) -> None:
+    def __init__(
+        self, zone_sources: list[ZoneSource], support: PrintSupport | None = None
+    ) -> None:
         super().__init__()
         self.zone_sources = zone_sources
-        self.signals = GenerationSignals()
+        self.support = support or PrintSupport()
+        self.signals = CompositionSignals()
 
     def run(self) -> None:
         try:
             mesh = compose_scene_mesh(self.zone_sources)
+            panel_z_max = float(mesh.vertices[:, 2].max())
+            if self.support.support_type is not SupportType.NONE:
+                base_zone = next(
+                    s.zone for s in self.zone_sources if s.zone.composition_mode.value == "base"
+                )
+                mesh = attach_support(mesh, base_zone.geometry_params.width_mm, self.support)
             result = validate_mesh(mesh)
         except NotImplementedError as exc:
             logger.info("Composition refusee (fonctionnalite non supportee) : %s", exc)
@@ -120,6 +137,6 @@ class CompositionWorker(QRunnable):
                 result.volume_mm3,
                 result.connected_components,
             )
-            self.signals.succeeded.emit(mesh)
+            self.signals.succeeded.emit(mesh, panel_z_max)
 
         self.signals.finished.emit()

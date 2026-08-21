@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from pathlib import Path
 
 _LOGGER_NAME = "lithoshape3d"
+
+
+def _platform_log_dir() -> Path:
+    """Repertoire de logs standard par plateforme -- macOS et Windows ont des
+    conventions differentes, ni l'une ni l'autre n'est un chemin sur (ni
+    portable) sur l'autre systeme."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "LithoShape3D"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(base) / "LithoShape3D" / "Logs"
+    return Path.home() / ".local" / "state" / "LithoShape3D" / "logs"
 
 
 def configure_logging() -> logging.Logger:
@@ -15,7 +29,7 @@ def configure_logging() -> logging.Logger:
 
     logger.setLevel(logging.INFO)
 
-    log_dir = Path.home() / "Library" / "Logs" / "LithoShape3D"
+    log_dir = _platform_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
 
     file_handler = logging.FileHandler(log_dir / "lithoshape3d.log")

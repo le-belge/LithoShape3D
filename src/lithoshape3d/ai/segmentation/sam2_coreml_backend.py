@@ -11,6 +11,7 @@ dans ce module -- jamais dans base.py/mock_backend.py, jamais dans core/.
 from __future__ import annotations
 
 import logging
+import sys
 
 import numpy as np
 
@@ -95,6 +96,10 @@ class Sam2CoreMLBackend(SegmentationBackend):
         self._mask_decoder = None
 
     def is_available(self) -> bool:
+        if sys.platform != "darwin":
+            # CoreML est une technologie Apple : aucun runtime d'inference
+            # reel sur Windows/Linux, meme si le paquet Python s'installe.
+            return False
         try:
             import coremltools  # noqa: F401
         except ImportError:

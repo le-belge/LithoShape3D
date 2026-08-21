@@ -8,6 +8,8 @@ quitte la machine (le modele local ne fait ni requete reseau ni telemetrie).
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 MODEL_REPO = "apple/coreml-sam2.1-small"
@@ -21,7 +23,16 @@ LICENSE = "Apache 2.0 (Apple / Meta)"
 
 
 def cache_dir() -> Path:
-    return Path.home() / "Library" / "Caches" / "LithoShape3D" / "models" / "sam2.1-small"
+    """En pratique n'est utilise que sur macOS (CoreML n'existe pas sur
+    Windows/Linux -- voir Sam2CoreMLBackend.is_available()), mais reste
+    defini pour toute plateforme par prudence."""
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home()))
+    else:
+        base = Path.home() / ".cache"
+    return base / "LithoShape3D" / "models" / "sam2.1-small"
 
 
 def is_downloaded() -> bool:
