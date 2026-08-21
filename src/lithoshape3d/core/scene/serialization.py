@@ -15,17 +15,20 @@ from typing import Any
 from lithoshape3d.core.scene.models import (
     CompositionMode,
     GeometryParameters,
+    ImageTransform,
     Material,
     PrintSupport,
     Project,
     ReliefMode,
     Scene,
+    ShapeParams,
+    ShapeType,
     SupportType,
     Transform,
     Zone,
 )
 
-CURRENT_FORMAT_VERSION = 4
+CURRENT_FORMAT_VERSION = 5
 
 
 def _transform_to_dict(transform: Transform) -> dict[str, Any]:
@@ -85,6 +88,48 @@ def _support_from_dict(data: dict[str, Any]) -> PrintSupport:
         overhang_right_mm=data.get("overhang_right_mm", 5.0),
         rib_count=data.get("rib_count", 3),
         rib_thickness_mm=data.get("rib_thickness_mm", 2.0),
+    )
+
+
+def _shape_to_dict(shape: ShapeParams) -> dict[str, Any]:
+    return {
+        "shape_type": shape.shape_type.value,
+        "text": shape.text,
+        "font_path": shape.font_path,
+        "bold": shape.bold,
+        "source_image_path": shape.source_image_path,
+        "border_width_mm": shape.border_width_mm,
+    }
+
+
+def _shape_from_dict(data: dict[str, Any]) -> ShapeParams:
+    return ShapeParams(
+        shape_type=ShapeType(data.get("shape_type", ShapeType.RECTANGLE.value)),
+        text=data.get("text", ""),
+        font_path=data.get("font_path"),
+        bold=data.get("bold", False),
+        source_image_path=data.get("source_image_path"),
+        border_width_mm=data.get("border_width_mm", 0.0),
+    )
+
+
+def _image_transform_to_dict(transform: ImageTransform) -> dict[str, Any]:
+    return {
+        "offset_x": transform.offset_x,
+        "offset_y": transform.offset_y,
+        "scale": transform.scale,
+        "rotation_deg": transform.rotation_deg,
+        "fit_mode": transform.fit_mode,
+    }
+
+
+def _image_transform_from_dict(data: dict[str, Any]) -> ImageTransform:
+    return ImageTransform(
+        offset_x=data.get("offset_x", 0.0),
+        offset_y=data.get("offset_y", 0.0),
+        scale=data.get("scale", 1.0),
+        rotation_deg=data.get("rotation_deg", 0.0),
+        fit_mode=data.get("fit_mode", "fit"),
     )
 
 
@@ -153,6 +198,8 @@ def project_to_dict(project: Project) -> dict[str, Any]:
             "source_image_path": project.scene.source_image_path,
             "active_zone_id": project.scene.active_zone_id,
             "support": _support_to_dict(project.scene.support),
+            "shape": _shape_to_dict(project.scene.shape),
+            "image_transform": _image_transform_to_dict(project.scene.image_transform),
         },
     }
 
@@ -226,10 +273,29 @@ def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """Migration additive : ajoute Scene.shape et Scene.image_transform
+    (Shape Composer, v0.4). Un projet v4 devient explicitement
+    `Shape=Rectangle` avec un cadrage identite (offset=0, scale=1,
+    rotation=0) -- ce qui reproduit EXACTEMENT son comportement precedent
+    (masque de forme = plein cadre, image non recadree) : un projet
+    existant ne doit jamais changer visuellement du seul fait de cette
+    migration."""
+    scene = data.setdefault("scene", {})
+    scene.setdefault("shape", {"shape_type": ShapeType.RECTANGLE.value})
+    scene.setdefault(
+        "image_transform",
+        {"offset_x": 0.0, "offset_y": 0.0, "scale": 1.0, "rotation_deg": 0.0, "fit_mode": "fill"},
+    )
+    data["format_version"] = 5
+    return data
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 

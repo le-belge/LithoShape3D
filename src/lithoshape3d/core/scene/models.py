@@ -80,6 +80,63 @@ class PrintSupport:
     rib_thickness_mm: float = 2.0
 
 
+class ShapeType(Enum):
+    """Silhouette physique de l'objet compose (Scene entiere, pas une Zone).
+    Independant de ReliefMode/CompositionMode/Material -- voir
+    core/geometry/shape.py. SVG et IMAGE partagent le meme mecanisme
+    (`ShapeParams.source_image_path`) : un SVG est rasterise une fois a
+    l'import puis traite exactement comme une image alpha -- pas un
+    sixieme moteur geometrique distinct."""
+
+    RECTANGLE = "rectangle"
+    CIRCLE = "circle"
+    OVAL = "oval"
+    HEART = "heart"
+    STAR = "star"
+    TEXT = "text"
+    SVG = "svg"
+    IMAGE = "image"
+
+
+@dataclass
+class ShapeParams:
+    shape_type: ShapeType = ShapeType.RECTANGLE
+    text: str = ""
+    """Utilise si shape_type == TEXT."""
+    font_path: str | None = None
+    """Chemin (absolu ou relatif au bundle) vers un fichier .ttf/.otf.
+    `None` = police de secours choisie automatiquement (voir
+    core/geometry/shape.py:_fallback_font_path)."""
+    bold: bool = False
+    source_image_path: str | None = None
+    """Utilise si shape_type in (SVG, IMAGE) : image alpha/N&B (opaque ou
+    blanc = interieur, transparent ou noir = exterieur). Un SVG importe est
+    rasterise une fois vers ce meme mecanisme (voir ui/shape_svg_import.py)."""
+    border_width_mm: float = 0.0
+    """Bordure geometrique qui suit le contour de la forme (dilatation) --
+    0 = pas de bordure. Optionnellement multi-materiau (voir Zone.material) ;
+    la geometrie fonctionne independamment de tout materiau assigne."""
+
+
+@dataclass
+class ImageTransform:
+    """Cadrage de la photo A L'INTERIEUR de la Shape -- concept independant
+    du zoom/pan de visualisation (qui ne modifie jamais rien de persistant,
+    voir ui/mask_editor_dialog.py) et de toute transformation de geometrie
+    3D. Coordonnees en fraction de la largeur/hauteur canonique de la Scene
+    (pas des pixels ni des mm) : reste valide quels que soient resolution ou
+    dimensions physiques choisies ensuite."""
+
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    scale: float = 1.0
+    rotation_deg: float = 0.0
+    fit_mode: str = "fit"
+    """"fill" | "fit" | "center" | "free" -- purement informatif/UX (quel
+    bouton de cadrage a produit ces valeurs) ; le rendu utilise toujours
+    offset/scale/rotation directement, jamais le mode en lui-meme."""
+
+
 @dataclass
 class GeometryParameters:
     width_mm: float
@@ -121,10 +178,12 @@ class Scene:
     """Image partagee par le workflow classique 1 image -> plusieurs zones."""
     active_zone_id: str | None = None
     support: PrintSupport = field(default_factory=PrintSupport)
+    shape: ShapeParams = field(default_factory=ShapeParams)
+    image_transform: ImageTransform = field(default_factory=ImageTransform)
 
 
 @dataclass
 class Project:
     name: str = "untitled"
     scene: Scene = field(default_factory=Scene)
-    format_version: int = 4
+    format_version: int = 5

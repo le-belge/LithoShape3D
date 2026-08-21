@@ -108,8 +108,7 @@ def test_composition_with_support_produces_single_manifold_body(main_window, tmp
     from lithoshape3d.core.geometry.support import attach_support
 
     panel_mesh = compose_scene_mesh(main_window._build_zone_sources())
-    base_zone = main_window._active_zone()
-    fused = attach_support(panel_mesh, base_zone.geometry_params.width_mm, main_window._project.scene.support)
+    fused = attach_support(panel_mesh, main_window._project.scene.support)
     result = validate_mesh(fused)
     assert result.is_valid
     assert result.connected_components == 1

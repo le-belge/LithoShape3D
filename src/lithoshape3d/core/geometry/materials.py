@@ -31,22 +31,33 @@ from lithoshape3d.core.geometry.mesh_builder import (
     build_mesh_from_heightfield,
 )
 from lithoshape3d.core.image.preprocessing import resize_array
+from lithoshape3d.core.scene.models import ImageTransform
 
 
 def _compose_cell_ownership(
-    zone_sources: list[ZoneSource], mask_threshold: float
+    zone_sources: list[ZoneSource], mask_threshold: float, shape_mask: np.ndarray | None
 ) -> np.ndarray:
     """Retourne une grille (rows-1, cols-1) d'ids de Zone (ou None), un
     "proprietaire" par cellule -- meme regle de recouvrement et meme ordre
     d'iteration que `compose_scene_heightfield` (la derniere zone visible
     dont le masque couvre entierement les 4 coins d'une cellule en devient
     proprietaire, qu'elle soit BASE/REPLACE/ADD : visuellement, c'est
-    toujours la matiere la plus "au-dessus" a cet endroit)."""
+    toujours la matiere la plus "au-dessus" a cet endroit). `shape_mask`
+    (v0.4) restreint l'attribution exactement comme en composition : jamais
+    de proprietaire hors de la Shape."""
     base_source = next(
         s for s in zone_sources if s.zone.visible and s.zone.composition_mode.value == "base"
     )
     rows, cols = grid_dimensions(base_source.zone.geometry_params)
     owner = np.full((rows - 1, cols - 1), None, dtype=object)
+
+    if shape_mask is None:
+        shape_active = np.ones((rows, cols), dtype=bool)
+    else:
+        if shape_mask.shape != (rows, cols):
+            shape_mask = resize_array(shape_mask.astype(np.float32), width_px=cols, height_px=rows) >= 0.5
+        shape_active = np.flipud(shape_mask)
+    shape_cell_active = shape_active[:-1, :-1] & shape_active[:-1, 1:] & shape_active[1:, :-1] & shape_active[1:, 1:]
 
     for source in zone_sources:
         zone = source.zone
@@ -62,7 +73,7 @@ def _compose_cell_ownership(
 
         active = mask >= mask_threshold
         cell_active = active[:-1, :-1] & active[:-1, 1:] & active[1:, :-1] & active[1:, 1:]
-        owner[cell_active] = zone.id
+        owner[cell_active & shape_cell_active] = zone.id
 
     return owner
 
@@ -70,6 +81,8 @@ def _compose_cell_ownership(
 def partition_mesh_by_material(
     zone_sources: list[ZoneSource],
     mask_threshold: float = DEFAULT_MASK_THRESHOLD,
+    image_transform: ImageTransform | None = None,
+    shape_mask: np.ndarray | None = None,
 ) -> dict[str, trimesh.Trimesh]:
     """Retourne {nom_materiau: mesh_ferme_independant}, tous alignes sur le
     meme repere. Les zones invisibles sont ignorees (comme en composition).
@@ -79,14 +92,16 @@ def partition_mesh_by_material(
     visible_sources = [s for s in zone_sources if s.zone.visible]
     materials_used = {s.zone.material.name for s in visible_sources}
 
-    z_final, active_final, width_mm, height_mm = compose_scene_heightfield(zone_sources, mask_threshold)
+    z_final, active_final, width_mm, height_mm = compose_scene_heightfield(
+        zone_sources, mask_threshold, image_transform=image_transform, shape_mask=shape_mask
+    )
 
     if len(materials_used) <= 1:
         material_name = next(iter(materials_used), "default")
         return {material_name: build_mesh_from_heightfield(z_final, active_final, width_mm, height_mm)}
 
     base_source = next(s for s in visible_sources if s.zone.composition_mode.value == "base")
-    owner_cells = _compose_cell_ownership(zone_sources, mask_threshold)
+    owner_cells = _compose_cell_ownership(zone_sources, mask_threshold, shape_mask)
 
     active_cells = active_final[:-1, :-1] & active_final[:-1, 1:] & active_final[1:, :-1] & active_final[1:, 1:]
     orphan_cells = active_cells & np.equal(owner_cells, None)

@@ -20,18 +20,18 @@ def panel_mesh():
 
 
 def test_support_none_returns_mesh_unchanged(panel_mesh):
-    fused = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=SupportType.NONE))
+    fused = attach_support(panel_mesh, PrintSupport(support_type=SupportType.NONE))
 
     assert fused is panel_mesh
 
 
 def test_build_support_mesh_none_returns_none():
-    assert build_support_mesh(WIDTH_MM, PrintSupport(support_type=SupportType.NONE)) is None
+    assert build_support_mesh(0.0, WIDTH_MM, PrintSupport(support_type=SupportType.NONE)) is None
 
 
 @pytest.mark.parametrize("support_type", [SupportType.FLAT, SupportType.REINFORCED])
 def test_support_fuses_into_single_manifold_body(panel_mesh, support_type):
-    fused = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=support_type))
+    fused = attach_support(panel_mesh, PrintSupport(support_type=support_type))
 
     result = validate_mesh(fused)
     assert result.is_watertight
@@ -44,7 +44,7 @@ def test_support_fuses_into_single_manifold_body(panel_mesh, support_type):
 
 def test_support_does_not_float_below_the_panel(panel_mesh):
     """Le pied doit toucher/recouvrir le panneau, pas etre detache dans l'espace."""
-    fused = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=SupportType.FLAT))
+    fused = attach_support(panel_mesh, PrintSupport(support_type=SupportType.FLAT))
 
     assert fused.bounds[0][1] < 0.0  # s'etend bien sous Y=0 (bord bas du panneau)
     assert validate_mesh(fused).connected_components == 1
@@ -54,7 +54,7 @@ def test_support_respects_overhang_and_height_params(panel_mesh):
     support = PrintSupport(
         support_type=SupportType.FLAT, height_mm=12.0, overhang_left_mm=3.0, overhang_right_mm=7.0
     )
-    fused = attach_support(panel_mesh, WIDTH_MM, support)
+    fused = attach_support(panel_mesh, support)
 
     assert fused.bounds[0][0] == pytest.approx(-3.0, abs=0.5)
     assert fused.bounds[1][0] == pytest.approx(WIDTH_MM + 7.0, abs=0.5)
@@ -64,7 +64,7 @@ def test_support_respects_overhang_and_height_params(panel_mesh):
 def test_support_does_not_alter_panel_content_above_the_seam(panel_mesh):
     """Le pied ne doit pas modifier le contenu lithophanique au-dessus de la
     zone de raccord : les sommets du panneau loin de Y=0 restent inchanges."""
-    fused = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=SupportType.FLAT))
+    fused = attach_support(panel_mesh, PrintSupport(support_type=SupportType.FLAT))
 
     far_from_seam = panel_mesh.vertices[panel_mesh.vertices[:, 1] > HEIGHT_MM * 0.5]
     for vertex in far_from_seam[:: max(1, len(far_from_seam) // 20)]:
@@ -72,7 +72,7 @@ def test_support_does_not_alter_panel_content_above_the_seam(panel_mesh):
 
 
 def test_reinforced_uses_more_material_than_flat(panel_mesh):
-    flat = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=SupportType.FLAT))
-    reinforced = attach_support(panel_mesh, WIDTH_MM, PrintSupport(support_type=SupportType.REINFORCED))
+    flat = attach_support(panel_mesh, PrintSupport(support_type=SupportType.FLAT))
+    reinforced = attach_support(panel_mesh, PrintSupport(support_type=SupportType.REINFORCED))
 
     assert reinforced.volume > flat.volume

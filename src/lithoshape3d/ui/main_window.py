@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -49,8 +50,14 @@ from lithoshape3d.core.export.multi_material_export import (
 )
 from lithoshape3d.core.export.stl_export import export_stl
 from lithoshape3d.core.geometry.composition import ZoneSource
-from lithoshape3d.core.geometry.heightmap import height_mm_from_aspect_ratio
+from lithoshape3d.core.geometry.heightmap import grid_dimensions, height_mm_from_aspect_ratio
 from lithoshape3d.core.geometry.materials import partition_mesh_by_material
+from lithoshape3d.core.geometry.shape import (
+    apply_border,
+    build_shape_mask,
+    build_shape_mask_from_image_array,
+    count_connected_components,
+)
 from lithoshape3d.core.geometry.support import build_support_mesh
 from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import image_size
@@ -64,12 +71,15 @@ from lithoshape3d.core.scene.mask_io import load_zone_mask
 from lithoshape3d.core.scene.models import (
     CompositionMode,
     GeometryParameters,
+    ImageTransform,
     Project,
     ReliefMode,
+    ShapeType,
     SupportType,
     Zone,
 )
 from lithoshape3d.core.scene.project_io import load_project_bundle, save_project_bundle
+from lithoshape3d.core.validation.printability import check_printability
 from lithoshape3d.ui.mask_editor_dialog import MaskEditorDialog
 from lithoshape3d.ui.overlay import render_overlay, zone_color
 from lithoshape3d.ui.state import AppState
@@ -279,6 +289,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_bar)
 
         self._load_support_into_panel()
+        self._load_shape_into_panel()
         self._set_state(AppState.NO_IMAGE)
 
         # Taille minimale globale = somme des minimums des 3 colonnes du
@@ -486,6 +497,60 @@ class MainWindow(QMainWindow):
         image_form.addRow("Luminosite", self.brightness_spin)
 
         layout.addWidget(image_group)
+
+        shape_group = QGroupBox("Forme")
+        shape_layout = QVBoxLayout(shape_group)
+        shape_layout.setSpacing(8)
+        shape_form = QFormLayout()
+        shape_form.setSpacing(8)
+
+        self.shape_type_combo = QComboBox()
+        self.shape_type_combo.addItem("Rectangle", ShapeType.RECTANGLE)
+        self.shape_type_combo.addItem("Cercle", ShapeType.CIRCLE)
+        self.shape_type_combo.addItem("Ovale", ShapeType.OVAL)
+        self.shape_type_combo.addItem("Coeur", ShapeType.HEART)
+        self.shape_type_combo.addItem("Etoile", ShapeType.STAR)
+        self.shape_type_combo.addItem("Texte", ShapeType.TEXT)
+        self.shape_type_combo.addItem("SVG", ShapeType.SVG)
+        self.shape_type_combo.addItem("Image", ShapeType.IMAGE)
+        self.shape_type_combo.currentIndexChanged.connect(self._on_shape_changed)
+        shape_form.addRow("Type", self.shape_type_combo)
+
+        self.shape_text_edit = QLineEdit()
+        self.shape_text_edit.setPlaceholderText("ex. M, LOVE, 2026...")
+        self.shape_text_edit.editingFinished.connect(self._on_shape_changed)
+        shape_form.addRow("Texte", self.shape_text_edit)
+
+        self.shape_bold_checkbox = QCheckBox("Gras")
+        self.shape_bold_checkbox.toggled.connect(self._on_shape_changed)
+        shape_form.addRow("", self.shape_bold_checkbox)
+
+        self.shape_border_spin = QDoubleSpinBox()
+        self.shape_border_spin.setRange(0.0, 20.0)
+        self.shape_border_spin.setSingleStep(0.5)
+        self.shape_border_spin.setSuffix(" mm")
+        self.shape_border_spin.valueChanged.connect(self._on_shape_changed)
+        shape_form.addRow("Bordure", self.shape_border_spin)
+
+        shape_layout.addLayout(shape_form)
+
+        self.shape_import_button = QPushButton("Importer SVG/image...")
+        self.shape_import_button.clicked.connect(self._on_import_shape_source_clicked)
+        shape_layout.addWidget(self.shape_import_button)
+
+        self.shape_source_label = QLabel("")
+        self.shape_source_label.setWordWrap(True)
+        shape_layout.addWidget(self.shape_source_label)
+
+        self.shape_info_label = QLabel("")
+        self.shape_info_label.setWordWrap(True)
+        shape_layout.addWidget(self.shape_info_label)
+
+        self.cadrage_button = QPushButton("Cadrer la photo...")
+        self.cadrage_button.clicked.connect(self._on_cadrage_clicked)
+        shape_layout.addWidget(self.cadrage_button)
+
+        layout.addWidget(shape_group)
 
         support_group = QGroupBox("Support d'impression")
         support_form = QFormLayout(support_group)
@@ -889,6 +954,70 @@ class MainWindow(QMainWindow):
             for zone in self._project.scene.zones
         ]
 
+    def _resolve_shape_source_path(self) -> str | None:
+        source = self._project.scene.shape.source_image_path
+        if not source:
+            return None
+        path = Path(source)
+        if not path.is_absolute() and self._project_bundle_dir is not None:
+            path = self._project_bundle_dir / path
+        return str(path)
+
+    def _current_shape_mask(self) -> np.ndarray | None:
+        """Silhouette physique de la Scene (Shape Composer, v0.4), a la
+        resolution de la grille canonique -- `None` = pas de restriction
+        (rectangle plein, comportement historique). Erreurs de rendu
+        (police manquante, image de forme introuvable) degradent
+        proprement vers "pas de forme" plutot que de bloquer la generation."""
+        base_zone = next(
+            (z for z in self._project.scene.zones if z.composition_mode == CompositionMode.BASE), None
+        )
+        if base_zone is None:
+            return None
+        rows, cols = grid_dimensions(base_zone.geometry_params)
+        shape = self._project.scene.shape
+
+        try:
+            if shape.shape_type in (ShapeType.IMAGE, ShapeType.SVG):
+                path = self._resolve_shape_source_path()
+                if not path:
+                    return None
+                with Image.open(path) as image:
+                    if "A" in image.getbands():
+                        channel = np.asarray(image.split()[-1], dtype=np.float32) / 255.0
+                    else:
+                        channel = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+                mask = build_shape_mask_from_image_array(channel, rows, cols)
+            else:
+                mask = build_shape_mask(shape, rows, cols)
+        except (ValueError, OSError) as exc:
+            logger.warning("Masque de forme indisponible, generation sans restriction : %s", exc)
+            return None
+
+        if shape.border_width_mm > 0:
+            px_per_mm = cols / base_zone.geometry_params.width_mm
+            mask = apply_border(mask, shape.border_width_mm * px_per_mm)
+        return mask
+
+    def _base_zone_resolution_mm(self) -> float | None:
+        base_zone = next(
+            (z for z in self._project.scene.zones if z.composition_mode == CompositionMode.BASE), None
+        )
+        return base_zone.geometry_params.resolution if base_zone is not None else None
+
+    def _effective_image_transform(self) -> ImageTransform | None:
+        """`None` (chemin historique exact, cf. core/geometry/composition.py)
+        pour le cas Rectangle+cadrage jamais touche -- garantit qu'un projet
+        n'utilisant pas le Shape Composer (nouveau ou migre v4->v5) genere
+        des resultats bit-a-bit identiques a la 0.3. Des qu'une Shape non
+        rectangulaire est choisie OU que le cadrage a ete modifie, bascule
+        sur le vrai pipeline de cadrage isotrope (core/image/transform.py)."""
+        shape = self._project.scene.shape
+        transform = self._project.scene.image_transform
+        if shape.shape_type is ShapeType.RECTANGLE and transform == ImageTransform():
+            return None
+        return transform
+
     def _refresh_zones_list(self) -> None:
         self.zones_list.blockSignals(True)
         self.zones_list.clear()
@@ -906,6 +1035,7 @@ class MainWindow(QMainWindow):
 
         self._load_zone_params_into_panel(self._active_zone())
         self._load_support_into_panel()
+        self._load_shape_into_panel()
         self._update_source_preview()
         self._set_state(self._state)  # rafraichit l'activation des boutons zones
 
@@ -1027,6 +1157,126 @@ class MainWindow(QMainWindow):
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 
+    # ------------------------------------------------------------------ #
+    # Forme (Shape Composer, v0.4)
+    # ------------------------------------------------------------------ #
+    def _load_shape_into_panel(self) -> None:
+        shape = self._project.scene.shape
+        for widget in (
+            self.shape_type_combo,
+            self.shape_text_edit,
+            self.shape_bold_checkbox,
+            self.shape_border_spin,
+        ):
+            widget.blockSignals(True)
+        self._set_combo_data(self.shape_type_combo, shape.shape_type)
+        self.shape_text_edit.setText(shape.text)
+        self.shape_bold_checkbox.setChecked(shape.bold)
+        self.shape_border_spin.setValue(shape.border_width_mm)
+        for widget in (
+            self.shape_type_combo,
+            self.shape_text_edit,
+            self.shape_bold_checkbox,
+            self.shape_border_spin,
+        ):
+            widget.blockSignals(False)
+        self._update_shape_source_label()
+        self._update_shape_visibility()
+        self._update_shape_info_label()
+
+    def _update_shape_source_label(self) -> None:
+        source = self._project.scene.shape.source_image_path
+        self.shape_source_label.setText(Path(source).name if source else "(aucun fichier importe)")
+
+    def _update_shape_visibility(self) -> None:
+        shape_type = self.shape_type_combo.currentData()
+        is_text = shape_type is ShapeType.TEXT
+        is_import = shape_type in (ShapeType.SVG, ShapeType.IMAGE)
+        self.shape_text_edit.setVisible(is_text)
+        self.shape_bold_checkbox.setVisible(is_text)
+        self.shape_import_button.setVisible(is_import)
+        self.shape_source_label.setVisible(is_import)
+
+    def _update_shape_info_label(self) -> None:
+        """Comptage de composantes disjointes (2.10) -- purement informatif,
+        jamais reliees automatiquement."""
+        mask = self._current_shape_mask()
+        if mask is None:
+            self.shape_info_label.setText("")
+            return
+        count = count_connected_components(mask)
+        if count <= 1:
+            self.shape_info_label.setText("")
+        else:
+            self.shape_info_label.setText(f"Cette forme contient {count} elements separes.")
+
+    def _on_shape_changed(self, *_args) -> None:
+        shape = self._project.scene.shape
+        shape.shape_type = self.shape_type_combo.currentData()
+        shape.text = self.shape_text_edit.text()
+        shape.bold = self.shape_bold_checkbox.isChecked()
+        shape.border_width_mm = self.shape_border_spin.value()
+        self._update_shape_visibility()
+        self._update_shape_info_label()
+        self._current_material_meshes = None
+
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+
+    def _on_import_shape_source_clicked(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self, "Importer une forme", "", "SVG (*.svg);;Images (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not path:
+            return
+
+        shape = self._project.scene.shape
+        if path.lower().endswith(".svg"):
+            try:
+                from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
+
+                rasterized_path = rasterize_svg_to_alpha_png(path)
+            except Exception as exc:
+                logger.exception("Echec de la rasterisation SVG")
+                QMessageBox.critical(self, "LithoShape3D", f"Impossible d'importer ce SVG :\n{exc}")
+                return
+            shape.shape_type = ShapeType.SVG
+            shape.source_image_path = rasterized_path
+            self._set_combo_data(self.shape_type_combo, ShapeType.SVG)
+        else:
+            shape.shape_type = ShapeType.IMAGE
+            shape.source_image_path = path
+            self._set_combo_data(self.shape_type_combo, ShapeType.IMAGE)
+
+        self._update_shape_source_label()
+        self._update_shape_visibility()
+        self._update_shape_info_label()
+        self._current_material_meshes = None
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+
+    def _on_cadrage_clicked(self) -> None:
+        if not self._image_path:
+            return
+        shape_mask = self._current_shape_mask()
+        if shape_mask is None:
+            base_zone = self._active_zone()
+            if base_zone is None:
+                return
+            rows, cols = grid_dimensions(base_zone.geometry_params)
+            shape_mask = np.ones((rows, cols), dtype=bool)
+
+        from lithoshape3d.ui.cadrage_dialog import CadrageDialog
+
+        source_array = to_grayscale_array(load_image(self._image_path))
+        dialog = CadrageDialog(source_array, shape_mask, self._project.scene.image_transform, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._project.scene.image_transform = dialog.transform
+            self._current_material_meshes = None
+            self._update_source_preview()
+            if self._state is AppState.MESH_READY:
+                self._set_state(AppState.PARAMS_DIRTY)
+
     def _on_zone_selection_changed(self) -> None:
         item = self.zones_list.currentItem()
         if item is None:
@@ -1142,7 +1392,12 @@ class MainWindow(QMainWindow):
             return
 
         if self.view_composition_button.isChecked():
-            worker = CompositionWorker(self._build_zone_sources(), support=self._project.scene.support)
+            worker = CompositionWorker(
+                self._build_zone_sources(),
+                support=self._project.scene.support,
+                image_transform=self._effective_image_transform(),
+                shape_mask=self._current_shape_mask(),
+            )
             worker.signals.succeeded.connect(self._on_composition_succeeded)
         else:
             zone = self._active_zone()
@@ -1177,6 +1432,26 @@ class MainWindow(QMainWindow):
         self._render_current_display_mode()
         self.scene_viewer.view_isometric()
         self._set_state(AppState.MESH_READY)
+        self._report_printability(mesh)
+
+    def _report_printability(self, mesh) -> None:
+        """Diagnostic non bloquant (cf. 2.16) : le mesh a deja passe
+        `validate_mesh` dans le worker (sinon `_on_generation_failed` aurait
+        ete appele) -- ici on informe seulement l'utilisateur d'eventuels
+        points d'attention (composantes disjointes, elements fins, dimension
+        limite) sans jamais empecher l'export."""
+        try:
+            report = check_printability(
+                mesh, shape_mask=self._current_shape_mask(), pixel_size_mm=self._base_zone_resolution_mm()
+            )
+        except (ValueError, OSError) as exc:
+            logger.warning("Diagnostic d'imprimabilite indisponible : %s", exc)
+            return
+        if report.warnings:
+            logger.info("Diagnostic d'imprimabilite : %s", "; ".join(report.warnings))
+            self.statusBar().showMessage(
+                "Mesh genere -- a verifier avant impression : " + "; ".join(report.warnings), 8000
+            )
 
     def _on_generation_failed(self, message: str) -> None:
         self._current_mesh = None
@@ -1201,7 +1476,11 @@ class MainWindow(QMainWindow):
     def _materials_for_display(self) -> dict[str, tuple[object, tuple[float, float, float]]]:
         if self._current_material_meshes is None:
             try:
-                self._current_material_meshes = partition_mesh_by_material(self._build_zone_sources())
+                self._current_material_meshes = partition_mesh_by_material(
+                    self._build_zone_sources(),
+                    image_transform=self._effective_image_transform(),
+                    shape_mask=self._current_shape_mask(),
+                )
             except (ValueError, NotImplementedError) as exc:
                 logger.warning("Partition par materiau indisponible : %s", exc)
                 self._current_material_meshes = {}
@@ -1216,12 +1495,14 @@ class MainWindow(QMainWindow):
         }
 
         support = self._project.scene.support
-        base_zone = next(
-            (z for z in self._project.scene.zones if z.composition_mode == CompositionMode.BASE),
-            self._project.scene.zones[0] if self._project.scene.zones else None,
-        )
-        if support.support_type is not SupportType.NONE and base_zone is not None:
-            support_mesh = build_support_mesh(base_zone.geometry_params.width_mm, support)
+        panel_meshes = list(self._current_material_meshes.values())
+        if support.support_type is not SupportType.NONE and panel_meshes:
+            # bornes du PANNEAU SEUL (pas self._current_mesh, qui peut deja
+            # inclure un pied fusionne -- deriver l'etendue depuis un corps
+            # deja-fusionne double-compterait les debords).
+            x_min = min(float(m.bounds[0][0]) for m in panel_meshes)
+            x_max = max(float(m.bounds[1][0]) for m in panel_meshes)
+            support_mesh = build_support_mesh(x_min, x_max, support)
             if support_mesh is not None:
                 result["Support"] = (support_mesh, (0.5, 0.5, 0.5))
         return result

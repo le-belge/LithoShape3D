@@ -40,9 +40,16 @@ from lithoshape3d.core.geometry.mesh_builder import (
     build_mesh_from_heightfield,
 )
 from lithoshape3d.core.geometry.relief import compute_zone_contribution_mm
+from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import preprocess_image
-from lithoshape3d.core.image.preprocessing import resize_array
-from lithoshape3d.core.scene.models import CompositionMode, Zone
+from lithoshape3d.core.image.preprocessing import (
+    apply_brightness_contrast,
+    normalize,
+    resize_array,
+    to_grayscale_array,
+)
+from lithoshape3d.core.image.transform import apply_image_transform
+from lithoshape3d.core.scene.models import CompositionMode, ImageTransform, Zone
 
 
 @dataclass
@@ -71,9 +78,23 @@ def _find_base_zone(zone_sources: list[ZoneSource]) -> ZoneSource:
 def compose_scene_heightfield(
     zone_sources: list[ZoneSource],
     mask_threshold: float = DEFAULT_MASK_THRESHOLD,
+    image_transform: ImageTransform | None = None,
+    shape_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float, float]:
     """Compose sequentiellement les zones (dans l'ordre de la liste, qui doit
     deja refleter Scene.zones) en un champ de hauteur unique.
+
+    `image_transform` (Shape Composer, v0.4) : cadrage de la photo dans la
+    Shape -- voir core/image/transform.py. `None` reproduit exactement le
+    comportement historique (image etiree pour remplir la grille, sans
+    aucun recadrage) : compatible avec tous les appelants existants.
+
+    `shape_mask` (v0.4) : silhouette physique de l'objet (voir
+    core/geometry/shape.py), MEME convention d'orientation que les masques
+    de Zone (pas encore oriente Y-up : le flip se fait ici, une seule fois).
+    `effective_zone_mask = zone_mask AND shape_mask` -- aucune Zone ne peut
+    produire de matiere hors de la Shape. `None` = aucune restriction
+    (rectangle plein, comportement historique).
 
     Retourne (z_final_mm, active_final, width_mm, height_mm), tous deja
     orientes Y-up (haut de l'image -> Y max), prets pour
@@ -89,18 +110,35 @@ def compose_scene_heightfield(
     z_final = np.zeros((rows, cols), dtype=np.float32)
     active_final = np.zeros((rows, cols), dtype=bool)
 
+    if shape_mask is None:
+        shape_active = np.ones((rows, cols), dtype=bool)
+    else:
+        if shape_mask.shape != (rows, cols):
+            shape_mask = resize_array(shape_mask.astype(np.float32), width_px=cols, height_px=rows) >= 0.5
+        shape_active = np.flipud(shape_mask)
+
     for source in zone_sources:
         zone = source.zone
         if not zone.visible:
             continue
 
-        processed = preprocess_image(
-            source.image_path,
-            width_px=cols,
-            height_px=rows,
-            brightness=source.brightness,
-            contrast=source.contrast,
-        )
+        if image_transform is None:
+            processed = preprocess_image(
+                source.image_path,
+                width_px=cols,
+                height_px=rows,
+                brightness=source.brightness,
+                contrast=source.contrast,
+            )
+        else:
+            raw = to_grayscale_array(load_image(source.image_path))
+            transformed = apply_image_transform(
+                raw, image_transform, width_px=cols, height_px=rows, fill_value=1.0
+            )
+            transformed = apply_brightness_contrast(
+                transformed, brightness=source.brightness, contrast=source.contrast
+            )
+            processed = normalize(transformed)
         processed = np.flipud(processed)
 
         mask = source.mask
@@ -110,7 +148,7 @@ def compose_scene_heightfield(
             mask = resize_array(mask, width_px=cols, height_px=rows)
         mask = np.flipud(mask)
 
-        active = mask >= mask_threshold
+        active = (mask >= mask_threshold) & shape_active
         contribution = compute_zone_contribution_mm(processed, zone.geometry_params, zone.relief_mode)
 
         if zone.composition_mode in (CompositionMode.BASE, CompositionMode.REPLACE):
@@ -131,7 +169,11 @@ def compose_scene_heightfield(
 def compose_scene_mesh(
     zone_sources: list[ZoneSource],
     mask_threshold: float = DEFAULT_MASK_THRESHOLD,
+    image_transform: ImageTransform | None = None,
+    shape_mask: np.ndarray | None = None,
 ) -> trimesh.Trimesh:
     """Pipeline complet : zones -> champ de hauteur compose -> mesh unique ferme."""
-    z_final, active_final, width_mm, height_mm = compose_scene_heightfield(zone_sources, mask_threshold)
+    z_final, active_final, width_mm, height_mm = compose_scene_heightfield(
+        zone_sources, mask_threshold, image_transform=image_transform, shape_mask=shape_mask
+    )
     return build_mesh_from_heightfield(z_final, active_final, width_mm, height_mm)

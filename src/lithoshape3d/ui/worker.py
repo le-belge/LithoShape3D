@@ -18,7 +18,12 @@ from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
 from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
 from lithoshape3d.core.geometry.support import attach_support
 from lithoshape3d.core.image.preprocessing import resize_array
-from lithoshape3d.core.scene.models import GeometryParameters, PrintSupport, SupportType
+from lithoshape3d.core.scene.models import (
+    GeometryParameters,
+    ImageTransform,
+    PrintSupport,
+    SupportType,
+)
 from lithoshape3d.core.validation.mesh_checks import validate_mesh
 
 logger = logging.getLogger("lithoshape3d.worker")
@@ -97,22 +102,27 @@ class CompositionWorker(QRunnable):
     resultats uniquement via signaux."""
 
     def __init__(
-        self, zone_sources: list[ZoneSource], support: PrintSupport | None = None
+        self,
+        zone_sources: list[ZoneSource],
+        support: PrintSupport | None = None,
+        image_transform: ImageTransform | None = None,
+        shape_mask: np.ndarray | None = None,
     ) -> None:
         super().__init__()
         self.zone_sources = zone_sources
         self.support = support or PrintSupport()
+        self.image_transform = image_transform
+        self.shape_mask = shape_mask
         self.signals = CompositionSignals()
 
     def run(self) -> None:
         try:
-            mesh = compose_scene_mesh(self.zone_sources)
+            mesh = compose_scene_mesh(
+                self.zone_sources, image_transform=self.image_transform, shape_mask=self.shape_mask
+            )
             panel_z_max = float(mesh.vertices[:, 2].max())
             if self.support.support_type is not SupportType.NONE:
-                base_zone = next(
-                    s.zone for s in self.zone_sources if s.zone.composition_mode.value == "base"
-                )
-                mesh = attach_support(mesh, base_zone.geometry_params.width_mm, self.support)
+                mesh = attach_support(mesh, self.support)
             result = validate_mesh(mesh)
         except NotImplementedError as exc:
             logger.info("Composition refusee (fonctionnalite non supportee) : %s", exc)

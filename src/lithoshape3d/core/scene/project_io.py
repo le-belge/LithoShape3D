@@ -35,13 +35,17 @@ def _relative_to_bundle(path: Path, bundle_dir: Path) -> str | None:
         return None
 
 
+def _ensure_file_in_bundle(external_path: Path, bundle_dir: Path, subdir: str) -> str:
+    target_dir = bundle_dir / subdir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / external_path.name
+    if not target.exists() or target.resolve() != external_path.resolve():
+        shutil.copy2(external_path, target)
+    return f"{subdir}/{external_path.name}"
+
+
 def _ensure_source_image_in_bundle(external_image_path: Path, bundle_dir: Path) -> str:
-    source_dir = bundle_dir / "source"
-    source_dir.mkdir(parents=True, exist_ok=True)
-    target = source_dir / external_image_path.name
-    if not target.exists() or target.resolve() != external_image_path.resolve():
-        shutil.copy2(external_image_path, target)
-    return f"source/{external_image_path.name}"
+    return _ensure_file_in_bundle(external_image_path, bundle_dir, "source")
 
 
 def save_project_bundle(
@@ -63,6 +67,24 @@ def save_project_bundle(
         if relative is None:
             relative = _ensure_source_image_in_bundle(candidate, bundle_dir)
         project.scene.source_image_path = relative
+
+    if project.scene.shape.source_image_path:
+        candidate = Path(project.scene.shape.source_image_path)
+        if not candidate.is_absolute():
+            candidate = bundle_dir / candidate
+        relative = _relative_to_bundle(candidate, bundle_dir)
+        if relative is None:
+            relative = _ensure_file_in_bundle(candidate, bundle_dir, "shapes")
+        project.scene.shape.source_image_path = relative
+
+    if project.scene.shape.font_path:
+        candidate = Path(project.scene.shape.font_path)
+        if not candidate.is_absolute():
+            candidate = bundle_dir / candidate
+        relative = _relative_to_bundle(candidate, bundle_dir)
+        if relative is None and candidate.is_file():
+            relative = _ensure_file_in_bundle(candidate, bundle_dir, "shapes")
+            project.scene.shape.font_path = relative
 
     if dirty_masks:
         for zone in project.scene.zones:
