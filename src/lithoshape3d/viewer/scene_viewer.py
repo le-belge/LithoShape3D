@@ -16,12 +16,26 @@ from __future__ import annotations
 
 from enum import Enum
 
+import numpy as np
 import trimesh
+from matplotlib.colors import LinearSegmentedColormap
 
 from lithoshape3d.viewer.adapter import mesh_to_polydata
 
 BACKGROUND_COLOR = "#2b2b2b"
 MESH_COLOR = "#e0dccb"
+BACKLIGHT_BACKGROUND_COLOR = "#0a0a0c"
+BACKLIGHT_DARK_COLOR = "#0c0600"  # matiere epaisse : peu de lumiere transmise
+BACKLIGHT_BRIGHT_COLOR = "#fffaf0"  # matiere fine : lumiere transmise, "glow"
+
+_BACKLIGHT_BRIGHTNESS_FLOOR = 0.04
+"""Luminosite minimale meme pour l'epaisseur la plus forte : une vraie
+lithophanie epaisse laisse toujours deviner un peu de lumiere, jamais un
+noir pur."""
+_BACKLIGHT_ATTENUATION_K = 4.5
+"""Coefficient d'attenuation (type loi de Beer-Lambert, brightness =
+exp(-k * epaisseur_normalisee)) : plus k est grand, plus le contraste entre
+zones fines (lumineuses) et zones epaisses (sombres) est marque."""
 
 # vecteur camera (direction objet -> camera) et "up" ecran, par vue.
 _VIEW_PRESETS: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {
@@ -38,6 +52,7 @@ class DisplayMode(Enum):
     SURFACE = "surface"
     WIREFRAME = "wireframe"
     SURFACE_WITH_EDGES = "surface_with_edges"
+    BACKLIGHT_PREVIEW = "backlight_preview"
 
 
 def _add_mesh_kwargs(display_mode: DisplayMode) -> dict:
@@ -46,6 +61,31 @@ def _add_mesh_kwargs(display_mode: DisplayMode) -> dict:
     if display_mode is DisplayMode.SURFACE_WITH_EDGES:
         return {"style": "surface", "show_edges": True, "color": MESH_COLOR}
     return {"style": "surface", "show_edges": False, "color": MESH_COLOR}
+
+
+def _backlight_brightness_from_z(points: np.ndarray) -> np.ndarray:
+    """Approxime la luminosite transmise par sommet a partir de l'epaisseur
+    locale, comme une lithophanie photographiee retro-eclairee.
+
+    Convention mesh_builder.py : face arriere plane a Z=0, face avant a
+    Z=epaisseur locale -- donc la coordonnee Z d'un sommet EST directement
+    l'epaisseur de matiere a cet endroit (pas d'interpolation a faire, les
+    parois laterales ne portent que les valeurs 0 ou epaisseur). Attenuation
+    de type Beer-Lambert (exponentielle) : fin = lumineux, epais = sombre.
+
+    Volontairement un mappage epaisseur -> couleur (pas une vraie
+    transparence alpha) : avec un vrai blending alpha sur fond sombre, une
+    zone fine se fond vers le fond NOIR (donc s'assombrit) au lieu de
+    "briller" -- l'inverse de l'effet recherche. Le mappage en couleur
+    reproduit fidelement ce que montre une vraie photo retro-eclairee, quel
+    que soit l'angle de vue en orbite."""
+    z = points[:, 2]
+    z_min, z_max = float(z.min()), float(z.max())
+    if z_max - z_min < 1e-9:
+        return np.full(len(z), 0.5)
+    normalized = (z - z_min) / (z_max - z_min)
+    attenuated = np.exp(-_BACKLIGHT_ATTENUATION_K * normalized)
+    return _BACKLIGHT_BRIGHTNESS_FLOOR + attenuated * (1.0 - _BACKLIGHT_BRIGHTNESS_FLOOR)
 
 
 class SceneViewer:
@@ -60,11 +100,22 @@ class SceneViewer:
 
     def show_mesh(self, mesh: trimesh.Trimesh, display_mode: DisplayMode = DisplayMode.SURFACE) -> None:
         """Affiche exactement le mesh fourni (aucune reparation, aucun recalcul)."""
-        polydata = mesh_to_polydata(mesh)
-
         if self._mesh_actor is not None:
             self.plotter.remove_actor(self._mesh_actor)
 
+        if display_mode is DisplayMode.BACKLIGHT_PREVIEW:
+            self._show_backlight_preview(mesh)
+        else:
+            self._show_normal(mesh, display_mode)
+
+        self.plotter.reset_camera()
+
+    def _show_normal(self, mesh: trimesh.Trimesh, display_mode: DisplayMode) -> None:
+        self.plotter.set_background(BACKGROUND_COLOR)
+        self.plotter.remove_all_lights()
+        self.plotter.enable_lightkit()
+
+        polydata = mesh_to_polydata(mesh)
         self._mesh_actor = self.plotter.add_mesh(
             polydata,
             smooth_shading=(display_mode is not DisplayMode.WIREFRAME),
@@ -72,7 +123,42 @@ class SceneViewer:
             specular_power=15,
             **_add_mesh_kwargs(display_mode),
         )
-        self.plotter.reset_camera()
+
+    def _show_backlight_preview(self, mesh: trimesh.Trimesh) -> None:
+        """Approxime le rendu d'une lithophanie retro-eclairee, photographiee
+        avec une lumiere derriere : la luminosite de chaque sommet est
+        derivee de l'epaisseur locale (voir `_backlight_brightness_from_z`)
+        et appliquee comme couleur (pas comme transparence -- cf. note dans
+        cette fonction). Un eclairage doux et majoritairement ambiant garde
+        le relief perceptible en orbite 3D sans ecraser le degrade de
+        luminosite qui porte l'essentiel de l'information. Approximation
+        visuelle -- pas une simulation physique de transmission lumineuse
+        (pas de raytracing/subsurface scattering)."""
+        self.plotter.set_background(BACKLIGHT_BACKGROUND_COLOR)
+        self.plotter.remove_all_lights()
+        self.plotter.enable_lightkit()
+
+        polydata = mesh_to_polydata(mesh)
+        polydata["brightness"] = _backlight_brightness_from_z(polydata.points)
+        cmap = LinearSegmentedColormap.from_list(
+            "litho_backlight", [BACKLIGHT_DARK_COLOR, BACKLIGHT_BRIGHT_COLOR]
+        )
+
+        self._mesh_actor = self.plotter.add_mesh(
+            polydata,
+            style="surface",
+            show_edges=False,
+            scalars="brightness",
+            cmap=cmap,
+            clim=(0.0, 1.0),
+            show_scalar_bar=False,
+            opacity=1.0,
+            smooth_shading=True,
+            ambient=0.35,
+            diffuse=0.75,
+            specular=0.08,
+            specular_power=8,
+        )
 
     def set_display_mode(self, mesh: trimesh.Trimesh, display_mode: DisplayMode) -> None:
         self.show_mesh(mesh, display_mode=display_mode)

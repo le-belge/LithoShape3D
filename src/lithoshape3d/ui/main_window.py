@@ -387,6 +387,7 @@ class MainWindow(QMainWindow):
         self.display_mode_combo.addItem("Surface", DisplayMode.SURFACE)
         self.display_mode_combo.addItem("Fil de fer", DisplayMode.WIREFRAME)
         self.display_mode_combo.addItem("Surface + aretes", DisplayMode.SURFACE_WITH_EDGES)
+        self.display_mode_combo.addItem("Apercu retro-eclaire", DisplayMode.BACKLIGHT_PREVIEW)
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.display_mode_combo)
 

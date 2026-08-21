@@ -5,7 +5,11 @@ import pyvista as pv
 from lithoshape3d.core.geometry.heightmap import Heightmap
 from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
 from lithoshape3d.core.scene.models import GeometryParameters
-from lithoshape3d.viewer.scene_viewer import DisplayMode, SceneViewer
+from lithoshape3d.viewer.scene_viewer import (
+    DisplayMode,
+    SceneViewer,
+    _backlight_brightness_from_z,
+)
 
 
 def _sample_mesh():
@@ -86,3 +90,36 @@ def test_reset_camera_does_not_raise(offscreen_plotter):
     viewer.view_top()
 
     viewer.reset_camera()  # ne doit pas lever, ne change pas l'orientation
+
+
+def test_backlight_brightness_is_higher_for_thinner_z():
+    """Fin = lumineux (brille sous retro-eclairage), epais = sombre."""
+    points = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.5], [0.0, 0.0, 1.0]])
+
+    brightness = _backlight_brightness_from_z(points)
+
+    assert brightness[0] > brightness[1] > brightness[2]
+    assert 0.0 <= brightness.min()
+    assert brightness.max() <= 1.0
+
+
+def test_backlight_brightness_handles_flat_mesh_without_error():
+    points = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]])
+
+    brightness = _backlight_brightness_from_z(points)
+
+    assert brightness.shape == (3,)
+    assert np.all(np.isfinite(brightness))
+
+
+def test_backlight_preview_switches_lighting_and_background(offscreen_plotter):
+    viewer = SceneViewer(offscreen_plotter)
+
+    viewer.show_mesh(_sample_mesh(), display_mode=DisplayMode.BACKLIGHT_PREVIEW)
+    offscreen_plotter.render()
+    assert len(offscreen_plotter.renderer.lights) >= 1
+
+    # revenir a un mode normal doit restaurer un rendu utilisable sans erreur
+    viewer.show_mesh(_sample_mesh(), display_mode=DisplayMode.SURFACE)
+    offscreen_plotter.render()
+    assert viewer._mesh_actor is not None
