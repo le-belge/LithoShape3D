@@ -29,10 +29,19 @@ import trimesh
 
 from lithoshape3d.core.scene.models import PrintSupport, SupportType
 
-_RIB_PANEL_PENETRATION_MM = 2.0
-"""De combien un renfort remonte au-dela de Y=0 (dans le panneau) -- garantit
-un recouvrement volumique reel avec le panneau, pas juste un contact de
-surface (voir note de module)."""
+_FOOT_PANEL_PENETRATION_MM = 2.0
+"""De combien le pied plat lui-meme remonte au-dela de `y_top` (le point le
+plus bas reel du panneau, pas Y=0 suppose -- voir `attach_support`) :
+minimum necessaire pour un recouvrement volumique reel avec le panneau,
+quelle que soit la Shape (une Shape inscrite avec marge, comme le coeur,
+peut n'avoir qu'une pointe etroite a cette altitude)."""
+
+_RIB_PANEL_PENETRATION_MM = 2 * _FOOT_PANEL_PENETRATION_MM
+"""De combien un renfort remonte au-dela de `y_top` -- volontairement PLUS
+que `_FOOT_PANEL_PENETRATION_MM` : un renfort qui ne remonterait pas plus
+haut que le pied plat lui-meme serait entierement englobe dans son volume
+(donc sans effet reel), ce qui viderait `SupportType.REINFORCED` de son
+interet par rapport a `SupportType.FLAT`."""
 
 
 def _to_manifold(mesh: trimesh.Trimesh):
@@ -52,21 +61,34 @@ def _from_manifold(manifold) -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
 
 
-def _flat_foot_mesh(x_min: float, x_max: float, support: PrintSupport) -> trimesh.Trimesh:
+def _flat_foot_mesh(x_min: float, x_max: float, y_top: float, support: PrintSupport) -> trimesh.Trimesh:
+    """Le pied remonte de `_FOOT_PANEL_PENETRATION_MM` au-dessus de `y_top`
+    (pas seulement affleurant) : necessaire des qu'une Shape (v0.4) n'a plus
+    un bord bas rectangulaire plein A Y=0 -- un coeur inscrit avec marge, un
+    cercle ou une lettre isolee ont leur point le plus bas a un `y_top` reel
+    (parfois tres au-dessus de 0, cf. `attach_support`), et sur une portion
+    etroite (pointe/jambage) plutot que la largeur X totale du mesh. Sans
+    caler le pied sur ce `y_top` reel (et non sur un Y=0 suppose), l'union
+    manifold3d peut laisser panneau et pied entierement disjoints
+    (`connected_components` > 1) meme si le pied semble visuellement en
+    place -- meme principe que pour les renforts, voir note de module."""
     x_min = x_min - support.overhang_left_mm
     x_max = x_max + support.overhang_right_mm
-    extents = [x_max - x_min, support.height_mm, support.depth_mm]
+    top_y = y_top + _FOOT_PANEL_PENETRATION_MM
+    extents = [x_max - x_min, support.height_mm + _FOOT_PANEL_PENETRATION_MM, support.depth_mm]
     box = trimesh.creation.box(extents=extents)
     center = [
         (x_min + x_max) / 2.0,
-        -support.height_mm / 2.0,
+        top_y - extents[1] / 2.0,
         support.depth_mm / 2.0,
     ]
     box.apply_translation(center)
     return box
 
 
-def _reinforcement_ribs(x_min: float, x_max: float, support: PrintSupport) -> list[trimesh.Trimesh]:
+def _reinforcement_ribs(
+    x_min: float, x_max: float, y_top: float, support: PrintSupport
+) -> list[trimesh.Trimesh]:
     """Renforts : petits piliers pleins repartis sur la largeur utile (hors
     debords), qui prolongent localement le pied vers le haut, a l'interieur
     du panneau, sur `_RIB_PANEL_PENETRATION_MM`.
@@ -89,7 +111,7 @@ def _reinforcement_ribs(x_min: float, x_max: float, support: PrintSupport) -> li
         centers = np.linspace(usable_start, usable_end, support.rib_count)
 
     half_thickness = support.rib_thickness_mm / 2.0
-    y_min, y_max = -support.height_mm, _RIB_PANEL_PENETRATION_MM
+    y_min, y_max = y_top - support.height_mm, y_top + _RIB_PANEL_PENETRATION_MM
     extents = [support.rib_thickness_mm, y_max - y_min, support.depth_mm]
     y_center = (y_min + y_max) / 2.0
     z_center = support.depth_mm / 2.0
@@ -103,36 +125,57 @@ def _reinforcement_ribs(x_min: float, x_max: float, support: PrintSupport) -> li
     return ribs
 
 
-def build_support_mesh(x_min: float, x_max: float, support: PrintSupport) -> trimesh.Trimesh | None:
+def build_support_mesh(
+    x_min: float, x_max: float, y_top: float, support: PrintSupport
+) -> trimesh.Trimesh | None:
     """Construit le pied seul (pas encore fusionne), sur l'etendue X
     [x_min, x_max] fournie -- generalise a toute Shape (v0.4) : passer les
     bornes X reelles du mesh compose (pas forcement [0, width_mm], une
     forme non rectangulaire -- coeur, lettre -- peut avoir une empreinte
-    plus etroite ou decalee a son bord bas). `None` si SupportType.NONE."""
+    plus etroite ou decalee a son bord bas). `y_top` : altitude Y reelle du
+    point le plus bas du mesh (pas forcement 0 -- une Shape inscrite avec
+    marge, comme le coeur, peut avoir tout son bord bas au-dessus de Y=0,
+    cf. `attach_support`). `None` si SupportType.NONE."""
     if support.support_type is SupportType.NONE:
         return None
 
-    parts = [_flat_foot_mesh(x_min, x_max, support)]
+    parts = [_flat_foot_mesh(x_min, x_max, y_top, support)]
     if support.support_type is SupportType.REINFORCED:
-        parts.extend(_reinforcement_ribs(x_min, x_max, support))
+        parts.extend(_reinforcement_ribs(x_min, x_max, y_top, support))
 
     if len(parts) == 1:
         return parts[0]
-    return trimesh.util.concatenate(parts)
+
+    # Union manifold3d (pas une simple concatenation) : depuis que le pied
+    # plat penetre lui-meme dans le panneau (cf. `_flat_foot_mesh`), il
+    # recouvre desormais aussi les renforts en volume (les deux occupent la
+    # meme plage Y pres du panneau) -- une concatenation naive produirait
+    # alors des faces internes dupliquees/qui se recouvrent, rejetees par
+    # `_to_manifold` en aval (mesh non watertight apres fusion).
+    merged = _to_manifold(parts[0])
+    for part in parts[1:]:
+        merged = merged + _to_manifold(part)
+    return _from_manifold(merged)
 
 
 def attach_support(mesh: trimesh.Trimesh, support: PrintSupport) -> trimesh.Trimesh:
     """Fusionne le pied au modele compose (union manifold3d). Retourne `mesh`
     inchange si `support.support_type is SupportType.NONE`.
 
-    L'etendue X du pied est deduite des bornes REELLES du mesh (pas d'une
-    largeur canonique supposee) : generalise automatiquement a toute Shape
-    -- un coeur, un cercle ou une lettre isolee obtiennent un pied cale sur
-    leur propre empreinte, pas sur un rectangle qui n'existe plus."""
+    L'etendue X ET l'altitude Y d'accroche du pied sont deduites des bornes
+    REELLES du mesh (jamais d'une largeur canonique ni d'un Y=0 supposes) :
+    generalise automatiquement a toute Shape -- un coeur inscrit avec marge,
+    un cercle ou une lettre isolee obtiennent un pied cale sur leur propre
+    empreinte ET sur leur point le plus bas reel, pas sur un rectangle
+    touchant Y=0 qui n'existe plus. Sans ce calage sur `y_top`, le pied et
+    le panneau peuvent rester des solides disjoints apres union manifold3d
+    (aucun recouvrement volumique reel) meme si le pied semble, visuellement,
+    juste en dessous."""
     if support.support_type is SupportType.NONE:
         return mesh
     x_min, x_max = float(mesh.bounds[0][0]), float(mesh.bounds[1][0])
-    support_mesh = build_support_mesh(x_min, x_max, support)
+    y_top = float(mesh.bounds[0][1])
+    support_mesh = build_support_mesh(x_min, x_max, y_top, support)
     if support_mesh is None:
         return mesh
 

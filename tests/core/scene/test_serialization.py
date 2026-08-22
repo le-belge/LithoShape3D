@@ -1,6 +1,7 @@
 import pytest
 
 from lithoshape3d.core.scene import GeometryParameters, Project, Scene, Zone
+from lithoshape3d.core.scene.models import ImageTransform, ShapeParams, ShapeType
 from lithoshape3d.core.scene.serialization import (
     load_project,
     project_from_dict,
@@ -44,6 +45,26 @@ def test_serialized_dict_carries_format_version():
     data = project_to_dict(_sample_project())
 
     assert data["format_version"] == 5
+
+
+def test_roundtrip_preserves_non_default_shape_and_image_transform():
+    """Regression : `project_from_dict` construisait `Scene(...)` sans jamais
+    passer `shape=`/`image_transform=` (bien que `_shape_from_dict`/
+    `_image_transform_from_dict` existent et que `project_to_dict` les
+    ecrive correctement) -- toute Shape non-Rectangle ou tout cadrage non
+    identite revenait donc silencieusement aux valeurs par defaut a chaque
+    rechargement de projet."""
+    project = _sample_project()
+    project.scene.shape = ShapeParams(shape_type=ShapeType.HEART, border_width_mm=2.0)
+    project.scene.image_transform = ImageTransform(offset_x=0.3, scale=1.5, rotation_deg=15.0)
+
+    restored = project_from_dict(project_to_dict(project))
+
+    assert restored.scene.shape.shape_type is ShapeType.HEART
+    assert restored.scene.shape.border_width_mm == 2.0
+    assert restored.scene.image_transform.offset_x == pytest.approx(0.3)
+    assert restored.scene.image_transform.scale == pytest.approx(1.5)
+    assert restored.scene.image_transform.rotation_deg == pytest.approx(15.0)
 
 
 def test_roundtrip_file(tmp_path):

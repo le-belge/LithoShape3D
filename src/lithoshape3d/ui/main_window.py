@@ -1502,7 +1502,8 @@ class MainWindow(QMainWindow):
             # deja-fusionne double-compterait les debords).
             x_min = min(float(m.bounds[0][0]) for m in panel_meshes)
             x_max = max(float(m.bounds[1][0]) for m in panel_meshes)
-            support_mesh = build_support_mesh(x_min, x_max, support)
+            y_top = min(float(m.bounds[0][1]) for m in panel_meshes)
+            support_mesh = build_support_mesh(x_min, x_max, y_top, support)
             if support_mesh is not None:
                 result["Support"] = (support_mesh, (0.5, 0.5, 0.5))
         return result

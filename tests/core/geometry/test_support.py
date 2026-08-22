@@ -26,7 +26,7 @@ def test_support_none_returns_mesh_unchanged(panel_mesh):
 
 
 def test_build_support_mesh_none_returns_none():
-    assert build_support_mesh(0.0, WIDTH_MM, PrintSupport(support_type=SupportType.NONE)) is None
+    assert build_support_mesh(0.0, WIDTH_MM, 0.0, PrintSupport(support_type=SupportType.NONE)) is None
 
 
 @pytest.mark.parametrize("support_type", [SupportType.FLAT, SupportType.REINFORCED])
@@ -76,3 +76,41 @@ def test_reinforced_uses_more_material_than_flat(panel_mesh):
     reinforced = attach_support(panel_mesh, PrintSupport(support_type=SupportType.REINFORCED))
 
     assert reinforced.volume > flat.volume
+
+
+@pytest.mark.parametrize("support_type", [SupportType.FLAT, SupportType.REINFORCED])
+def test_support_fuses_with_a_shape_whose_lowest_point_is_above_y_zero(support_type, tmp_path):
+    """Regression (2.13) : un Coeur (ShapeMask) inscrit avec marge dans la
+    grille canonique a son point le plus bas nettement au-dessus de Y=0
+    (verifie empiriquement ~10mm sur une grille 100x100mm/2mm-px) -- pas un
+    bord bas rectangulaire droit touchant Y=0. Le pied doit se caler sur ce
+    point reel (`y_top`), sinon il reste flottant sous le modele et l'union
+    manifold3d rend deux composantes disjointes au lieu d'un seul corps
+    imprimable."""
+    from PIL import Image
+
+    from lithoshape3d.core.geometry.composition import ZoneSource, compose_scene_mesh
+    from lithoshape3d.core.geometry.shape import build_shape_mask
+    from lithoshape3d.core.scene.models import (
+        CompositionMode,
+        ReliefMode,
+        ShapeParams,
+        ShapeType,
+        Zone,
+    )
+    from lithoshape3d.core.validation.mesh_checks import validate_mesh
+
+    image_path = tmp_path / "uniform.png"
+    Image.fromarray(np.full((300, 300), 150, dtype=np.uint8), mode="L").save(image_path)
+
+    params = GeometryParameters(width_mm=100.0, height_mm=100.0, resolution=2.0)
+    zone = Zone(name="base", composition_mode=CompositionMode.BASE, relief_mode=ReliefMode.LITHOPHANE, geometry_params=params)
+    heart = build_shape_mask(ShapeParams(shape_type=ShapeType.HEART), 50, 50)
+    panel = compose_scene_mesh([ZoneSource(zone=zone, image_path=str(image_path))], shape_mask=heart)
+    assert panel.bounds[0][1] > 5.0  # confirme que le point le plus bas n'est PAS pres de Y=0
+
+    fused = attach_support(panel, PrintSupport(support_type=support_type, height_mm=6.0))
+    result = validate_mesh(fused)
+
+    assert result.is_valid
+    assert result.connected_components == 1

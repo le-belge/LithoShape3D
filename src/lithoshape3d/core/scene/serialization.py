@@ -325,6 +325,8 @@ def project_from_dict(data: dict[str, Any]) -> Project:
             source_image_path=data["scene"].get("source_image_path"),
             active_zone_id=active_zone_id,
             support=_support_from_dict(data["scene"].get("support", {})),
+            shape=_shape_from_dict(data["scene"].get("shape", {})),
+            image_transform=_image_transform_from_dict(data["scene"].get("image_transform", {})),
         ),
         format_version=format_version,
     )
