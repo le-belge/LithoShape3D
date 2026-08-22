@@ -54,6 +54,51 @@ class Material:
     cote LithoShape3D, l'affectation reelle se fait dans le slicer."""
 
 
+class ColorStrategy(Enum):
+    """Comment une Zone destinee a un materiau/couleur distinct affecte (ou
+    non) la geometrie partagee (v0.4.1). Concept independant de ReliefMode/
+    CompositionMode -- voir core/geometry/composition.py pour l'effet exact.
+
+    `None` (valeur par defaut de `Zone.color_strategy`, PAS un membre de cet
+    enum) signifie "aucune strategie couleur" : la Zone garde le comportement
+    historique ADD/REPLACE/BASE + ReliefMode, une contribution geometrique
+    reelle (ex. relief grave). Des qu'une des valeurs ci-dessous est
+    positionnee, la Zone est EXCLUE de la composition du champ de hauteur
+    partage (`compose_scene_heightfield`) -- son ReliefMode/CompositionMode
+    propres deviennent alors sans effet sur la geometrie visible, seule son
+    appartenance materiau (et, pour BACKLIGHT_INSERT, sa cavite/insert)
+    compte. Garantit qu'assigner un materiau ne modifie jamais implicitement
+    la surface (cf. mission 0.4.1, bug de la rose en sur-relief)."""
+
+    MATERIAL_ONLY = "material_only"
+    """La Zone partage EXACTEMENT la geometrie deja composee par les autres
+    zones a cet endroit -- seule la partition materiau change, aucune
+    difference de surface avant/apres selection."""
+
+    BACKLIGHT_INSERT = "backlight_insert"
+    """Comme MATERIAL_ONLY pour la surface avant (aucune bosse), mais en
+    plus : une fine peau blanche est conservee en facade et un insert
+    colore independant est genere derriere, pour un rendu retro-eclaire
+    colore sans modifier la facade eteinte -- voir core/geometry/backlight.py."""
+
+
+@dataclass
+class BacklightInsertParams:
+    """Parametres du mode BACKLIGHT_INSERT (v0.4.1) -- toutes les valeurs
+    par defaut sont EXPERIMENTALES (a valider par de vraies impressions,
+    cf. mission), pas des constantes physiquement optimales."""
+
+    white_skin_thickness_mm: float = 0.40
+    insert_thickness_mm: float = 0.60
+    """Milieu de la plage recommandee par la mission (0.40-0.80mm) : assez
+    epais pour rester manipulable/imprimable independamment, assez fin pour
+    laisser passer la lumiere en retro-eclairage."""
+    xy_clearance_mm: float = 0.20
+    """Jeu lateral (pas en profondeur) entre le contour de l'insert et la
+    paroi de la cavite qui l'accueille, pour qu'il s'insere sans forcer.
+    Presets : Serre=0.10, Standard=0.20 (par defaut), Facile=0.30."""
+
+
 class SupportType(Enum):
     NONE = "none"
     FLAT = "flat"
@@ -168,6 +213,16 @@ class Zone:
     """BASE pour une zone de fondation (typiquement la premiere), ADD par
     defaut pour toute nouvelle zone (cas le plus frequent : ajouter un
     element sur une base existante)."""
+    color_strategy: ColorStrategy | None = None
+    """`None` = comportement historique (ReliefMode/CompositionMode font
+    foi, cf. docstring de `ColorStrategy`). Reste `None` pour la zone BASE
+    et pour tout projet migre depuis v5 (aucun changement de geometrie a la
+    migration) ; mis explicitement a `MATERIAL_ONLY` pour toute nouvelle
+    zone creee depuis la 0.4.1 (voir ui/main_window.py), pour que le
+    workflow "SAM2 + materiau" ne cree plus jamais de relief involontaire."""
+    backlight_insert: BacklightInsertParams = field(default_factory=BacklightInsertParams)
+    """Pertinent uniquement si `color_strategy is ColorStrategy.BACKLIGHT_INSERT` ;
+    conserve sinon (valeurs par defaut inoffensives, jamais lues)."""
     mesh_cache_path: str | None = None
 
 

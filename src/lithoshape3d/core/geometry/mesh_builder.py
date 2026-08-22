@@ -130,21 +130,30 @@ def build_mesh_from_heightfield(
     active: np.ndarray,
     width_mm: float,
     height_mm: float,
+    back_z: np.ndarray | None = None,
 ) -> trimesh.Trimesh:
     """Construit le volume ferme a partir d'un champ de hauteur DEJA oriente
     (Y-up, cf. flip dans `build_slab_mesh`) et DEJA compose si besoin.
 
-    Reutilise a la fois par le moteur mono-zone (`build_slab_mesh`) et par la
-    composition multi-zone (`core/geometry/composition.py`) -- un seul
-    chemin de construction de mesh, pas deux moteurs separes.
-    """
+    Reutilise a la fois par le moteur mono-zone (`build_slab_mesh`), par la
+    composition multi-zone (`core/geometry/composition.py`) et par le corps
+    blanc a cavite du Backlight Insert (`core/geometry/backlight.py`) -- un
+    seul chemin de construction de mesh, pas deux moteurs separes.
+
+    `back_z=None` (par defaut) reproduit exactement le comportement
+    historique : face arriere plane a Z=0 partout. Un `back_z` par-cellule
+    permet une face arriere non plane (ex. une cavite de Backlight Insert) --
+    doit rester strictement < `front_z` partout ou `active`, sous peine de
+    geometrie degeneree (verifie par l'appelant, pas ici : ce module reste
+    une brique geometrique pure, sans connaissance de la raison du creux)."""
     rows, cols = front_z.shape
 
     xs = np.linspace(0.0, width_mm, cols, dtype=np.float32)
     ys = np.linspace(0.0, height_mm, rows, dtype=np.float32)
     grid_x, grid_y = np.meshgrid(xs, ys)
 
-    back_z = np.zeros_like(front_z)
+    if back_z is None:
+        back_z = np.zeros_like(front_z)
 
     front_vertices = np.stack([grid_x, grid_y, front_z], axis=-1).reshape(-1, 3)
     back_vertices = np.stack([grid_x, grid_y, back_z], axis=-1).reshape(-1, 3)

@@ -161,14 +161,24 @@ def compose_scene_heightfield(
         mask = np.flipud(mask)
 
         active = (mask >= mask_threshold) & shape_active
-        contribution = compute_zone_contribution_mm(processed, zone.geometry_params, zone.relief_mode)
 
-        if zone.composition_mode in (CompositionMode.BASE, CompositionMode.REPLACE):
-            z_final[active] = contribution[active]
-        elif zone.composition_mode == CompositionMode.ADD:
-            z_final[active] += contribution[active]
-        else:
-            raise NotImplementedError(f"CompositionMode {zone.composition_mode} non supporte")
+        # Zone a ColorStrategy (v0.4.1) : exclue de la hauteur partagee --
+        # seule sa partition materiau/insert compte en aval (materials.py,
+        # backlight.py). Garantit qu'assigner un materiau/une strategie
+        # couleur a une zone ne modifie JAMAIS implicitement la surface deja
+        # composee par les autres zones (cf. mission 0.4.1, bug de sur-relief
+        # de la rose). La zone BASE reste toujours prise en compte -- c'est
+        # la fondation, elle ne peut pas etre "exclue" sans casser tout le
+        # resultat.
+        skip_height = zone.color_strategy is not None and zone.composition_mode is not CompositionMode.BASE
+        if not skip_height:
+            contribution = compute_zone_contribution_mm(processed, zone.geometry_params, zone.relief_mode)
+            if zone.composition_mode in (CompositionMode.BASE, CompositionMode.REPLACE):
+                z_final[active] = contribution[active]
+            elif zone.composition_mode == CompositionMode.ADD:
+                z_final[active] += contribution[active]
+            else:
+                raise NotImplementedError(f"CompositionMode {zone.composition_mode} non supporte")
 
         active_final |= active
 
