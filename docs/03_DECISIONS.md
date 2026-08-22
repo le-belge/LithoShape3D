@@ -246,3 +246,38 @@ disponibles en wheel, mais zéro exécution réelle — c'est un **choix
 produit affirmé**, pas encore une réalité technique vérifiée côté Windows.
 **Phase** : formalisé dans cette mission (Product Reset), mais implicite
 depuis que le spec Windows existe (0.3.0).
+
+---
+
+### Backlight Insert : cavité conditionnée à la profondeur locale, jamais silencieuse
+
+**Décision** : dans `compose_backlight_bodies`, une cavité n'est creusée
+à un point (x,y) que si l'épaisseur locale de la lithophanie suffit à
+loger SIMULTANÉMENT la peau demandée ET l'insert demandé
+(`front_z >= skin + insert_thickness`). Là où ce n'est pas le cas, aucune
+cavité n'est creusée à ce point précis (façade pleine épaisseur préservée)
+et un avertissement explicite est ajouté à `BacklightComposition.warnings`.
+**Raison** : premier test physique (2026-08-22) du Backlight Insert a
+révélé des perforations en façade. Diagnostic numérique : le STL livré
+était géométriquement parfait (watertight, manifold, peau exactement
+conforme), mais l'insert — construit comme un pavé uniforme
+`Z=[0, insert_thickness_mm]` indépendant de la cavité réellement creusée —
+pouvait chevaucher silencieusement le corps blanc solide aux points les
+plus fins de la photo (mesuré : 5/10768 points sur la démo réelle, jusqu'à
+0.047mm de chevauchement). `mesh_builder.build_mesh_from_heightfield`
+documente déjà explicitement que garantir `back_z < front_z` est la
+responsabilité de l'APPELANT, pas la sienne — cette responsabilité n'était
+que partiellement assumée (la peau elle-même était correcte, la profondeur
+utile pour l'insert ne l'était pas).
+**Alternative rejetée** : élargir la cavité pour "faire rentrer" l'insert
+quitte à réduire la peau sous la valeur demandée — explicitement interdit
+par la mission (préserver la façade en priorité, jamais un trou silencieux).
+**Conséquences** : dans les zones concernées, l'insert ne montre plus sa
+couleur en rétro-éclairage (comportement dégradé mais sûr) au lieu de
+produire un défaut de façade. 4 tests de régression ajoutés
+(`tests/core/geometry/test_backlight.py`) — confirmés en échec sur le code
+pré-correctif. Cette correction ne suffit probablement pas, à elle seule, à
+expliquer l'ampleur du défaut physique observé (ampleur mesurée trop
+faible) ; Backlight Insert reste `EXPERIMENTAL` en attendant la validation
+physique V2 (voir `docs/versions/CURRENT_STATE.md`).
+**Phase** : hotfix v0.4.2.

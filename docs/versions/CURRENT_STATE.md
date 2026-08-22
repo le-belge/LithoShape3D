@@ -3,19 +3,20 @@
 *Mis à jour à chaque release. Si ce document et le code divergent, le code
 a raison — mettre à jour ce fichier, pas l'inverse.*
 
-Dernière mise à jour : 2026-08-22, à la suite de la mission "Product Reset /
-Road to 1.0" (audit documentaire uniquement, aucun changement de code).
+Dernière mise à jour : 2026-08-22, à la suite du hotfix v0.4.2 (garantie de
+peau frontale du Backlight Insert, voir section dédiée plus bas) — HEAD de
+départ du hotfix : `6abe390` (commit "Product reset - Road to 1.0
+governance").
 
 ## Identité de version
 
 | | |
 |---|---|
-| Version | **0.4.1** (source unique : `src/lithoshape3d/__init__.py`, lu par `pyproject.toml` via `dynamic = ["version"]`) |
-| HEAD commit | `6d0f29e` |
-| Dernier tag | `v0.4.1` (pointe sur HEAD au moment de l'audit) |
+| Version | **0.4.2** (source unique : `src/lithoshape3d/__init__.py`, lu par `pyproject.toml` via `dynamic = ["version"]`) |
+| Dernier tag | `v0.4.1` (0.4.2 committé sans tag — validation physique V2 du Backlight Insert en attente, voir plus bas) |
 | Tags précédents | v0.2.0, v0.3.0, v0.3.1, v0.4.0 |
-| Tests | **342 passants**, 0 échec, `ruff check` clean |
-| Répartition tests | core/ 170 · ui/ 127 · viewer/ 26 · ai/ 11 · racine (architecture/CLI/package) ~8 |
+| Tests | **346 passants**, 0 échec, `ruff check` clean |
+| Répartition tests | core/ 174 · ui/ 127 · viewer/ 26 · ai/ 11 · racine (architecture/CLI/package) ~8 |
 | TODO/FIXME/HACK dans `src/` | 0 (recherche exhaustive, aucun marqueur) |
 
 ## Plateformes réellement testées
@@ -75,10 +76,47 @@ Légende : `DONE` (release-gate franchi) · `IMPLEMENTED_NOT_FIELD_VALIDATED`
 | Matériau par zone (nom/couleur/filament/slot) | DONE | |
 | Partition mesh par matériau | DONE | même règle de recouvrement que la composition de hauteur |
 | **Material Only** (couleur sans changement de géométrie) | DONE | corrige un bug réel signalé par l'utilisateur (relief involontaire) ; invariance de surface prouvée numériquement par test |
-| **Backlight Insert** | EXPERIMENTAL | géométrie correcte et prouvée manifold/watertight par tests + E2E réel réussi, mais **jamais imprimé physiquement** — épaisseurs peau/insert/jeu XY explicitement expérimentales. Un prototype démo (`examples/backlight_rose_demo/`) est prêt à imprimer mais le résultat réel sous LED n'a pas été observé |
+| **Backlight Insert** | EXPERIMENTAL | **PHYSICAL TEST #1 — FAIL** (voir note détaillée ci-dessous). Toujours EXPERIMENTAL après le hotfix v0.4.2 : correctif géométrique appliqué et testé, mais validation physique V2 en attente |
 | Front Insert | TODO (non commencé, prévu dans l'enum) | |
 | Export 3MF multi-matériaux | IMPLEMENTED_NOT_FIELD_VALIDATED | export standard `trimesh.Scene`, corps alignés dans le même repère — **jamais ouvert dans un vrai slicer** (Bambu Studio demandé deux fois cette session, accès refusé les deux fois par l'utilisateur via `request_access`, non contourné) |
 | Pied d'impression (plat/renforcé) | DONE | généralisé aux silhouettes non rectangulaires (union manifold3d réelle, pas juste un contact de surface) |
+
+#### Backlight Insert — PHYSICAL TEST #1 (2026-08-22)
+
+Premier test physique réel (démo femme+rose, `examples/backlight_rose_demo/`,
+skin=0.40mm, insert=0.60mm, clearance=0.20mm) : **FAIL**. La rose se
+colore bien via l'insert rétro-éclairé (le principe optique est
+prometteur — retenu comme signal positif), mais la façade présentait des
+ouvertures/perforations à l'emplacement de la rose au lieu de rester une
+lithophanie blanche continue.
+
+Diagnostic numérique (hotfix v0.4.2, mission dédiée) : le fichier STL livré
+était en réalité **géométriquement parfait** — watertight, manifold, peau
+blanche exactement 0.40mm partout où une cavité existait (0 point sous la
+valeur demandée, vérifié sur les 10 768 points de la zone). Un vrai bug
+distinct a été mesuré et corrigé : l'insert (pavé uniforme 0.60mm) n'était
+jamais vérifié contre la profondeur réelle de cavité disponible et pouvait
+localement chevaucher le corps blanc solide aux points les plus fins de la
+lithophanie (5 points sur 10 768 dans cette démo, jusqu'à 0.047mm de
+chevauchement) — corrigé dans `core/geometry/backlight.py` : ces points ne
+reçoivent plus de cavité (façade préservée, signalé dans `warnings`, jamais
+silencieux). 4 nouveaux tests de régression (`tests/core/geometry/test_backlight.py`).
+
+Cette correction, mesurée, ne suffit probablement PAS à expliquer l'ampleur
+du défaut physique observé (5/10768 points, ≤0.05mm — trop marginal). La
+cause dominante suspectée reste **physique/impression** : un pont/plafond
+non supporté d'environ 0.40mm (~2 couches) suivant un contour organique
+complexe est intrinsèquement marginal à imprimer de façon fiable en FDM —
+hypothèse non résolue par ce hotfix, nécessitant soit une peau plus épaisse
+(à valider empiriquement, pas de changement de défaut arbitraire), soit des
+réglages de pont dédiés, soit les deux.
+
+Une pièce de validation V2, petite et rapide (`examples/physical_validation/backlight_v2/`,
+55×53mm, même photo/pipeline SAM2 réel, mêmes paramètres skin/insert/clearance
+non modifiés), est prête à imprimer pour confirmer si le correctif +
+d'éventuels réglages d'impression suffisent. **Backlight Insert reste
+EXPERIMENTAL** jusqu'au PASS de ce test V2 — ne pas considérer DONE sur la
+seule base de la correction logicielle.
 
 ### Projet / plateforme
 

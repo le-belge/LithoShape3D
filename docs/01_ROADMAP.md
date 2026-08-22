@@ -15,13 +15,18 @@ nouvelle mission de développement.
 ## 0.4.x — Stabilisation *(en cours)*
 
 - [x] Material Only — livré 0.4.1, invariance de géométrie prouvée par test.
-- [x] Backlight Insert (prototype) — livré 0.4.1, **EXPERIMENTAL** tant que
-      non imprimé physiquement (voir CURRENT_STATE.md).
+- [x] Backlight Insert (prototype) — livré 0.4.1, **EXPERIMENTAL**.
+      Premier test physique (2026-08-22) : FAIL (perforations en façade) ;
+      hotfix v0.4.2 corrige un bug de collision insert/cavité mesuré et
+      confirmé mais probablement pas suffisant à lui seul (voir
+      CURRENT_STATE.md) — reste EXPERIMENTAL jusqu'au PASS physique V2.
 - [ ] Validation Bambu Studio — jamais réalisée (accès refusé deux fois
       cette session via automatisation ; nécessite une action manuelle de
       Mike).
-- [ ] Impressions physiques de référence — le prototype
-      `examples/backlight_rose_demo/` est prêt, jamais imprimé.
+- [ ] Validation physique V2 Backlight Insert — pièce prête
+      (`examples/physical_validation/backlight_v2/`), petite et rapide,
+      jamais imprimée. **Prochaine étape avant toute nouvelle
+      fonctionnalité Backlight.**
 - [ ] Bugs UX critiques restants — aucun identifié activement à ce jour ;
       dépend des retours d'usage réel.
 - Règle : aucune grosse nouvelle fonctionnalité tant que ces points ne sont

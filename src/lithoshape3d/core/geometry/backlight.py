@@ -140,7 +140,35 @@ def compose_backlight_bodies(
             continue
 
         params = zone.backlight_insert
-        insert_mask = _erode_by_mm(zone_active, params.xy_clearance_mm, pixel_size_mm)
+        skin = max(params.white_skin_thickness_mm, 0.0)
+        insert_thickness = max(params.insert_thickness_mm, 0.0)
+
+        # Garantie geometrique (hotfix v0.4.2) : l'insert est un pave UNIFORME
+        # pose contre le dos (Z=[0, insert_thickness_mm]), independant de la
+        # profondeur de cavite locale. La ou la lithophanie est localement
+        # trop fine pour loger a la fois la peau demandee ET l'insert
+        # (z_final < skin + insert_thickness), creuser quand meme la cavite
+        # ferait deborder l'insert DANS le corps blanc solide -- collision
+        # silencieuse entre les deux corps, visible en facade (trou/insert
+        # traversant). On exclut ces points de la cavite ET de l'empreinte de
+        # l'insert : la facade y reste pleine epaisseur (pas de coloration
+        # backlight a ces points precis), jamais un trou. Toujours signale,
+        # jamais silencieux (mission hotfix 0.4.2, section 9).
+        required_total = skin + insert_thickness
+        feasible = zone_active & (z_final >= required_total)
+        infeasible = zone_active & ~feasible
+        if infeasible.any():
+            worst_shortfall = float((required_total - z_final[infeasible]).max())
+            warnings.append(
+                f"Zone '{zone.name}' : {int(infeasible.sum())} point(s) trop fins pour loger "
+                f"a la fois la peau ({skin:.2f}mm) et l'insert ({insert_thickness:.2f}mm) -- "
+                f"jusqu'a {worst_shortfall:.3f}mm d'epaisseur locale manquante. Aucune cavite "
+                f"creusee a ces points (facade pleine epaisseur preservee, insert absent localement)."
+            )
+        if not feasible.any():
+            continue
+
+        insert_mask = _erode_by_mm(feasible, params.xy_clearance_mm, pixel_size_mm)
         if not insert_mask.any():
             warnings.append(
                 f"Zone '{zone.name}' : trop etroite pour le jeu XY configure "
@@ -148,12 +176,11 @@ def compose_backlight_bodies(
             )
             continue
 
-        skin = max(params.white_skin_thickness_mm, 0.0)
         candidate_back = np.clip(z_final - skin, 0.0, None)
         candidate_back = np.clip(np.minimum(candidate_back, z_final - _MIN_SKIN_RESIDUAL_MM), 0.0, None)
-        back_z[zone_active] = candidate_back[zone_active]
+        back_z[feasible] = candidate_back[feasible]
 
-        insert_front = np.full((rows, cols), params.insert_thickness_mm, dtype=np.float32)
+        insert_front = np.full((rows, cols), insert_thickness, dtype=np.float32)
         insert_mesh = build_mesh_from_heightfield(insert_front, insert_mask, width_mm, height_mm)
 
         name = zone.material.name

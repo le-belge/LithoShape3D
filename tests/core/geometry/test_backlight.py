@@ -4,8 +4,10 @@ masque complexe avec trou, jeu XY qui modifie reellement la geometrie)."""
 
 import numpy as np
 import pytest
+import trimesh
 from PIL import Image
 
+from lithoshape3d.core.geometry import backlight as backlight_module
 from lithoshape3d.core.geometry.backlight import compose_backlight_bodies
 from lithoshape3d.core.geometry.composition import ZoneSource, compose_scene_heightfield
 from lithoshape3d.core.scene.models import (
@@ -16,7 +18,7 @@ from lithoshape3d.core.scene.models import (
     Zone,
 )
 from lithoshape3d.core.validation.mesh_checks import validate_mesh
-from tests.fixtures.synthetic_masks import ring_mask
+from tests.fixtures.synthetic_masks import concave_star_mask, ring_mask
 
 ROWS, COLS = 60, 60
 WIDTH_MM, HEIGHT_MM = 60.0, 60.0
@@ -221,6 +223,166 @@ def test_backlight_zone_too_narrow_for_clearance_warns_instead_of_crashing(varie
     assert result.warnings != []
     assert "Rose" in result.warnings[0]
     assert validate_mesh(result.white_mesh).is_valid  # degrade proprement, pas de crash
+
+
+def _compose_and_capture_heightfields(sources):
+    """Espionne `build_mesh_from_heightfield` pour recuperer les tableaux
+    front_z/back_z du CORPS BLANC (l'appel avec back_z != None) tels que
+    `compose_backlight_bodies` les a reellement calcules -- permet de
+    verifier le contrat geometrique de la mission hotfix 0.4.2 au niveau du
+    champ de hauteur, pas seulement du mesh final."""
+    captured = []
+    original = backlight_module.build_mesh_from_heightfield
+
+    def spy(front_z, active, width_mm, height_mm, back_z=None):
+        captured.append({"front_z": front_z.copy(), "active": active.copy(), "back_z": None if back_z is None else back_z.copy()})
+        return original(front_z, active, width_mm, height_mm, back_z=back_z)
+
+    backlight_module.build_mesh_from_heightfield = spy
+    try:
+        result = compose_backlight_bodies(sources)
+    finally:
+        backlight_module.build_mesh_from_heightfield = original
+
+    white_call = next(c for c in captured if c["back_z"] is not None)
+    return result, white_call["front_z"], white_call["back_z"], white_call["active"]
+
+
+def test_backlight_thin_region_gets_no_cavity_instead_of_collision(tmp_path):
+    """Hotfix 0.4.2 -- reproduit le bug mesure sur la demo femme+rose : la ou
+    la lithophanie locale est trop fine pour loger a la fois la peau ET
+    l'insert (z_final < skin + insert_thickness), l'ancien code creusait
+    quand meme la cavite pleine profondeur, faisant deborder l'insert
+    (pave uniforme Z=[0, insert_thickness]) DANS le corps blanc solide --
+    collision silencieuse. Doit maintenant : ne creuser AUCUNE cavite a ces
+    points (facade pleine epaisseur, pas de trou) et le signaler."""
+    _yy, xx = np.mgrid[0:ROWS, 0:COLS]
+    # degrade lineaire en X : colonnes basses = fin (proche du plancher),
+    # colonnes hautes = epais -- une partie de la zone Backlight sera donc
+    # necessairement trop fine pour skin(0.4) + insert(0.6) = 1.0mm.
+    array = ((xx * 255) // COLS).astype(np.uint8)
+    image_path = tmp_path / "thin_gradient.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    base = Zone(
+        name="Base", composition_mode=CompositionMode.BASE,
+        geometry_params=_params(min_thickness_mm=0.2, max_thickness_mm=1.8),
+    )
+    rose = _backlight_zone(white_skin_thickness_mm=0.4, insert_thickness_mm=0.6)
+    sources = [
+        ZoneSource(zone=base, image_path=str(image_path)),
+        ZoneSource(zone=rose, image_path=str(image_path), mask=_rose_mask()),
+    ]
+
+    result, front_z, back_z, active = _compose_and_capture_heightfields(sources)
+
+    assert result.warnings != []
+    assert any("trop fins" in w for w in result.warnings)
+
+    # `_rose_mask()` est en orientation image (Y-down) ; `front_z`/`back_z`/
+    # `active` captures sont deja dans l'orientation canonique Y-up utilisee
+    # en interne (cf. le flip dans `_effective_zone_active`) -- reproduire
+    # le meme flip ici pour comparer les memes cellules.
+    zone_mask = np.flipud(_rose_mask()).astype(bool) & active
+    thin_points = zone_mask & (front_z < 1.0)
+    thick_points = zone_mask & (front_z >= 1.0)
+    assert thin_points.any() and thick_points.any(), "le degrade doit couvrir les deux cas dans le test"
+
+    # points trop fins : AUCUNE cavite creusee (back_z reste au defaut = 0,
+    # facade pleine epaisseur -- jamais de trou).
+    assert np.all(back_z[thin_points] == 0.0)
+
+    # points assez epais : cavite creusee, ET l'insert (0.6mm) tient
+    # entierement dans la profondeur disponible (l'invariant que l'ancien
+    # code ne verifiait pas).
+    assert np.all(back_z[thick_points] > 0.0)
+    assert np.all(back_z[thick_points] >= 0.6 - 1e-6)
+
+    # l'empreinte de l'insert doit exclure la region trop fine (rester a
+    # gauche du debut de la zone trop fine, avec une petite marge pour
+    # l'arrondi resolution/erosion XY).
+    insert_mesh = result.insert_meshes["Rose"]
+    thin_xs_mm = np.where(thin_points.any(axis=0))[0] * (WIDTH_MM / COLS)
+    if thin_xs_mm.size:
+        assert insert_mesh.bounds[1][0] <= thin_xs_mm.min() + 1.0
+
+    assert validate_mesh(result.white_mesh).is_valid
+    assert validate_mesh(insert_mesh).is_valid
+
+
+def test_backlight_minimum_effective_skin_meets_requested_everywhere(varied_image):
+    """Mission hotfix 0.4.2, Test 1 : partout ou une cavite EST creusee,
+    front_z - back_z >= requested_skin_thickness (a la tolerance numerique
+    pres) -- jamais moins, jamais silencieusement."""
+    base = _base_zone()
+    requested_skin = 0.4
+    rose = _backlight_zone(white_skin_thickness_mm=requested_skin, insert_thickness_mm=0.6)
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    _result, front_z, back_z, _active = _compose_and_capture_heightfields(sources)
+
+    carved = back_z > 0.0
+    assert carved.any()
+    effective_skin = (front_z - back_z)[carved]
+    assert effective_skin.min() >= requested_skin - 1e-6
+
+
+def test_backlight_complex_rose_like_contour_never_undershoots_skin(tmp_path):
+    """Mission hotfix 0.4.2, Test 3 : contour concave/complexe (etoile,
+    proxy pour un masque SAM2 organique type petales de rose) -- aucun point
+    de la zone Backlight ne doit tomber sous l'epaisseur de peau demandee."""
+    fine_rows, fine_cols = 200, 200
+    fine_width_mm = fine_height_mm = 60.0
+    _yy, xx = np.mgrid[0:fine_rows, 0:fine_cols]
+    array = ((xx * 255) // fine_cols).astype(np.uint8)
+    image_path = tmp_path / "fine_gradient.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    params = GeometryParameters(
+        width_mm=fine_width_mm, height_mm=fine_height_mm,
+        min_thickness_mm=1.5, max_thickness_mm=3.0, resolution=fine_width_mm / fine_cols,
+    )
+    base = Zone(name="Base", composition_mode=CompositionMode.BASE, geometry_params=params)
+    star = concave_star_mask(fine_rows, fine_cols).astype(np.float32)
+    requested_skin = 0.4
+    rose = _backlight_zone(white_skin_thickness_mm=requested_skin, insert_thickness_mm=0.6, xy_clearance_mm=0.2)
+    sources = [
+        ZoneSource(zone=base, image_path=str(image_path)),
+        ZoneSource(zone=rose, image_path=str(image_path), mask=star),
+    ]
+
+    result, front_z, back_z, _active = _compose_and_capture_heightfields(sources)
+
+    carved = back_z > 0.0
+    assert carved.any()
+    effective_skin = (front_z - back_z)[carved]
+    assert effective_skin.min() >= requested_skin - 1e-6
+    assert validate_mesh(result.white_mesh).is_valid
+    assert validate_mesh(result.insert_meshes["Rose"]).is_valid
+
+
+def test_backlight_stl_round_trip_stays_watertight(tmp_path, varied_image):
+    """Mission hotfix 0.4.2, Test 6 : export -> reimport -> validation."""
+    base = _base_zone()
+    rose = _backlight_zone()
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+    result = compose_backlight_bodies(sources)
+
+    white_path = tmp_path / "white.stl"
+    insert_path = tmp_path / "insert.stl"
+    result.white_mesh.export(white_path)
+    result.insert_meshes["Rose"].export(insert_path)
+
+    reloaded_white = trimesh.load(white_path, process=True)
+    reloaded_insert = trimesh.load(insert_path, process=True)
+    assert reloaded_white.is_watertight
+    assert reloaded_insert.is_watertight
 
 
 def test_no_backlight_zones_matches_plain_composition(varied_image):
