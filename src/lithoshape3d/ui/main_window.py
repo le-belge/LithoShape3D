@@ -49,6 +49,7 @@ from lithoshape3d.core.export.multi_material_export import (
     export_stl_per_material,
 )
 from lithoshape3d.core.export.stl_export import export_stl
+from lithoshape3d.core.geometry.backlight import BacklightComposition
 from lithoshape3d.core.geometry.composition import ZoneSource
 from lithoshape3d.core.geometry.heightmap import grid_dimensions, height_mm_from_aspect_ratio
 from lithoshape3d.core.geometry.materials import partition_mesh_by_material
@@ -69,6 +70,7 @@ from lithoshape3d.core.image.preprocessing import (
 )
 from lithoshape3d.core.scene.mask_io import load_zone_mask
 from lithoshape3d.core.scene.models import (
+    ColorStrategy,
     CompositionMode,
     GeometryParameters,
     ImageTransform,
@@ -83,7 +85,7 @@ from lithoshape3d.core.validation.printability import check_printability
 from lithoshape3d.ui.mask_editor_dialog import MaskEditorDialog
 from lithoshape3d.ui.overlay import render_overlay, zone_color
 from lithoshape3d.ui.state import AppState
-from lithoshape3d.ui.worker import CompositionWorker, GenerationWorker
+from lithoshape3d.ui.worker import BacklightCompositionWorker, CompositionWorker, GenerationWorker
 from lithoshape3d.viewer.scene_viewer import DisplayMode, SceneViewer
 
 logger = logging.getLogger("lithoshape3d.ui")
@@ -227,6 +229,7 @@ class MainWindow(QMainWindow):
         self._current_mesh = None
         self._current_panel_z_max: float | None = None
         self._current_material_meshes: dict[str, object] | None = None
+        self._current_backlight_result: BacklightComposition | None = None
         self._state = AppState.NO_IMAGE
         self._thread_pool = QThreadPool.globalInstance()
         self._segmentation_backend = _create_segmentation_backend()
@@ -441,6 +444,49 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(material_group)
 
+        color_strategy_group = QGroupBox("Strategie couleur")
+        color_strategy_form = QFormLayout(color_strategy_group)
+        color_strategy_form.setSpacing(8)
+
+        self.color_strategy_combo = QComboBox()
+        self.color_strategy_combo.addItem("Materiau seul", ColorStrategy.MATERIAL_ONLY)
+        self.color_strategy_combo.addItem("Insert retro-eclaire", ColorStrategy.BACKLIGHT_INSERT)
+        self.color_strategy_combo.setToolTip(
+            "Materiau seul : assigner un materiau/une couleur a cette zone ne "
+            "change jamais la geometrie deja composee.\n"
+            "Insert retro-eclaire : conserve une fine peau blanche en facade et "
+            "genere un insert colore independant a placer derriere."
+        )
+        color_strategy_form.addRow("Mode", self.color_strategy_combo)
+
+        self.backlight_skin_spin = QDoubleSpinBox()
+        self.backlight_skin_spin.setRange(0.05, 2.0)
+        self.backlight_skin_spin.setSingleStep(0.05)
+        self.backlight_skin_spin.setSuffix(" mm")
+        self.backlight_skin_spin.setValue(0.40)
+        self.backlight_skin_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
+        color_strategy_form.addRow("Epaisseur peau blanche", self.backlight_skin_spin)
+
+        self.backlight_insert_thickness_spin = QDoubleSpinBox()
+        self.backlight_insert_thickness_spin.setRange(0.1, 2.0)
+        self.backlight_insert_thickness_spin.setSingleStep(0.05)
+        self.backlight_insert_thickness_spin.setSuffix(" mm")
+        self.backlight_insert_thickness_spin.setValue(0.60)
+        self.backlight_insert_thickness_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
+        color_strategy_form.addRow("Epaisseur insert", self.backlight_insert_thickness_spin)
+
+        self.backlight_clearance_combo = QComboBox()
+        self.backlight_clearance_combo.addItem("Serre (0.10 mm)", 0.10)
+        self.backlight_clearance_combo.addItem("Standard (0.20 mm)", 0.20)
+        self.backlight_clearance_combo.addItem("Facile (0.30 mm)", 0.30)
+        self.backlight_clearance_combo.setCurrentIndex(1)
+        self.backlight_clearance_combo.setToolTip(
+            "Jeu lateral entre l'insert et la cavite -- valeurs experimentales."
+        )
+        color_strategy_form.addRow("Jeu XY", self.backlight_clearance_combo)
+
+        layout.addWidget(color_strategy_group)
+
         geometry_group = QGroupBox("Geometrie")
         geometry_form = QFormLayout(geometry_group)
         geometry_form.setSpacing(8)
@@ -651,6 +697,10 @@ class MainWindow(QMainWindow):
         self.material_name_edit.editingFinished.connect(self._on_material_changed)
         self.material_filament_combo.currentIndexChanged.connect(self._on_material_changed)
         self.material_slot_spin.valueChanged.connect(self._on_material_changed)
+        self.color_strategy_combo.currentIndexChanged.connect(self._on_color_strategy_changed)
+        self.backlight_skin_spin.valueChanged.connect(self._on_color_strategy_changed)
+        self.backlight_insert_thickness_spin.valueChanged.connect(self._on_color_strategy_changed)
+        self.backlight_clearance_combo.currentIndexChanged.connect(self._on_color_strategy_changed)
         self.support_type_combo.currentIndexChanged.connect(self._on_support_changed)
         for spin in (
             self.support_height_spin,
@@ -1069,6 +1119,24 @@ class MainWindow(QMainWindow):
         self.material_slot_spin.blockSignals(False)
         self._update_material_color_button(zone.material.color)
 
+        self.color_strategy_combo.blockSignals(True)
+        self.backlight_skin_spin.blockSignals(True)
+        self.backlight_insert_thickness_spin.blockSignals(True)
+        self.backlight_clearance_combo.blockSignals(True)
+        # `color_strategy is None` (zone historique/BASE) s'affiche comme
+        # "Materiau seul" -- valeur la plus sure -- SANS jamais l'ecrire dans
+        # le modele tant que l'utilisateur ne touche pas explicitement ce
+        # combo (cf. _on_color_strategy_changed, jamais appele au chargement).
+        self._set_combo_data(self.color_strategy_combo, zone.color_strategy or ColorStrategy.MATERIAL_ONLY)
+        self.backlight_skin_spin.setValue(zone.backlight_insert.white_skin_thickness_mm)
+        self.backlight_insert_thickness_spin.setValue(zone.backlight_insert.insert_thickness_mm)
+        self._set_combo_data(self.backlight_clearance_combo, zone.backlight_insert.xy_clearance_mm)
+        self.color_strategy_combo.blockSignals(False)
+        self.backlight_skin_spin.blockSignals(False)
+        self.backlight_insert_thickness_spin.blockSignals(False)
+        self.backlight_clearance_combo.blockSignals(False)
+        self._update_color_strategy_visibility()
+
         self._update_height_display()
 
     def _update_material_color_button(self, color: tuple[float, float, float]) -> None:
@@ -1104,6 +1172,7 @@ class MainWindow(QMainWindow):
         zone.material.color = (chosen.redF(), chosen.greenF(), chosen.blueF())
         self._update_material_color_button(zone.material.color)
         self._current_material_meshes = None
+        self._current_backlight_result = None
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 
@@ -1116,11 +1185,35 @@ class MainWindow(QMainWindow):
         slot_value = self.material_slot_spin.value()
         zone.material.slot = None if slot_value < 0 else slot_value
         self._current_material_meshes = None
+        self._current_backlight_result = None
 
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
         elif self._state is AppState.ERROR:
             self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
+
+    def _on_color_strategy_changed(self, *_args) -> None:
+        zone = self._active_zone()
+        if zone is None:
+            return
+        zone.color_strategy = self.color_strategy_combo.currentData()
+        zone.backlight_insert.white_skin_thickness_mm = self.backlight_skin_spin.value()
+        zone.backlight_insert.insert_thickness_mm = self.backlight_insert_thickness_spin.value()
+        zone.backlight_insert.xy_clearance_mm = self.backlight_clearance_combo.currentData()
+        self._current_material_meshes = None
+        self._current_backlight_result = None
+        self._update_color_strategy_visibility()
+
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+        elif self._state is AppState.ERROR:
+            self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
+
+    def _update_color_strategy_visibility(self) -> None:
+        is_backlight = self.color_strategy_combo.currentData() is ColorStrategy.BACKLIGHT_INSERT
+        self.backlight_skin_spin.setVisible(is_backlight)
+        self.backlight_insert_thickness_spin.setVisible(is_backlight)
+        self.backlight_clearance_combo.setVisible(is_backlight)
 
     def _load_support_into_panel(self) -> None:
         support = self._project.scene.support
@@ -1219,6 +1312,7 @@ class MainWindow(QMainWindow):
         self._update_shape_visibility()
         self._update_shape_info_label()
         self._current_material_meshes = None
+        self._current_backlight_result = None
 
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
@@ -1252,6 +1346,7 @@ class MainWindow(QMainWindow):
         self._update_shape_visibility()
         self._update_shape_info_label()
         self._current_material_meshes = None
+        self._current_backlight_result = None
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 
@@ -1273,6 +1368,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._project.scene.image_transform = dialog.transform
             self._current_material_meshes = None
+            self._current_backlight_result = None
             self._update_source_preview()
             if self._state is AppState.MESH_READY:
                 self._set_state(AppState.PARAMS_DIRTY)
@@ -1307,7 +1403,17 @@ class MainWindow(QMainWindow):
         if not self._image_path:
             return
         index = len(self._project.scene.zones) + 1
-        zone = Zone(name=f"Zone {index}", geometry_params=self._current_geometry_parameters())
+        # MATERIAL_ONLY par defaut (pas None) : le workflow le plus courant
+        # pour une nouvelle zone est "selectionner une region (SAM2) et lui
+        # assigner un materiau" -- sans ceci, CompositionMode.ADD (le defaut
+        # de Zone) ajouterait silencieusement sa propre contribution de
+        # hauteur par-dessus la base (mission 0.4.1, bug de sur-relief). `None`
+        # reste reserve aux zones migrees d'un projet anterieur a la 0.4.1.
+        zone = Zone(
+            name=f"Zone {index}",
+            geometry_params=self._current_geometry_parameters(),
+            color_strategy=ColorStrategy.MATERIAL_ONLY,
+        )
         self._project.scene.zones.append(zone)
         self._project.scene.active_zone_id = zone.id
         self._refresh_zones_list()
@@ -1392,13 +1498,22 @@ class MainWindow(QMainWindow):
             return
 
         if self.view_composition_button.isChecked():
-            worker = CompositionWorker(
-                self._build_zone_sources(),
-                support=self._project.scene.support,
-                image_transform=self._effective_image_transform(),
-                shape_mask=self._current_shape_mask(),
-            )
-            worker.signals.succeeded.connect(self._on_composition_succeeded)
+            if self._scene_has_backlight_zone():
+                worker = BacklightCompositionWorker(
+                    self._build_zone_sources(),
+                    support=self._project.scene.support,
+                    image_transform=self._effective_image_transform(),
+                    shape_mask=self._current_shape_mask(),
+                )
+                worker.signals.succeeded.connect(self._on_backlight_composition_succeeded)
+            else:
+                worker = CompositionWorker(
+                    self._build_zone_sources(),
+                    support=self._project.scene.support,
+                    image_transform=self._effective_image_transform(),
+                    shape_mask=self._current_shape_mask(),
+                )
+                worker.signals.succeeded.connect(self._on_composition_succeeded)
         else:
             zone = self._active_zone()
             params = self._current_geometry_parameters()
@@ -1421,14 +1536,34 @@ class MainWindow(QMainWindow):
         self._current_mesh = mesh
         self._current_panel_z_max = None  # pas de pied concevable hors composition
         self._current_material_meshes = None
+        self._current_backlight_result = None
         self._render_current_display_mode()
         self.scene_viewer.view_isometric()
         self._set_state(AppState.MESH_READY)
+
+    def _scene_has_backlight_zone(self) -> bool:
+        return any(
+            zone.visible and zone.color_strategy is ColorStrategy.BACKLIGHT_INSERT
+            for zone in self._project.scene.zones
+        )
+
+    def _on_backlight_composition_succeeded(self, result, fused_white_mesh, panel_z_max: float) -> None:
+        self._current_mesh = fused_white_mesh
+        self._current_panel_z_max = panel_z_max
+        self._current_material_meshes = None
+        self._current_backlight_result = result  # panneau seul (pas de pied), reutilise par la vue Materiaux
+        self._render_current_display_mode()
+        self.scene_viewer.view_isometric()
+        self._set_state(AppState.MESH_READY)
+        self._report_printability(fused_white_mesh)
+        if result.warnings:
+            self.statusBar().showMessage("Backlight Insert -- " + " ".join(result.warnings), 10000)
 
     def _on_composition_succeeded(self, mesh, panel_z_max: float) -> None:
         self._current_mesh = mesh
         self._current_panel_z_max = panel_z_max
         self._current_material_meshes = None
+        self._current_backlight_result = None
         self._render_current_display_mode()
         self.scene_viewer.view_isometric()
         self._set_state(AppState.MESH_READY)
@@ -1457,6 +1592,7 @@ class MainWindow(QMainWindow):
         self._current_mesh = None
         self._current_panel_z_max = None
         self._current_material_meshes = None
+        self._current_backlight_result = None
         self._set_state(AppState.ERROR)
         QMessageBox.warning(self, "LithoShape3D", f"La generation a echoue :\n{message}")
 
@@ -1474,7 +1610,20 @@ class MainWindow(QMainWindow):
             )
 
     def _materials_for_display(self) -> dict[str, tuple[object, tuple[float, float, float]]]:
-        if self._current_material_meshes is None:
+        if self._current_backlight_result is not None:
+            # Panneau blanc AVEC cavites (pas la partition naive de
+            # partition_mesh_by_material, qui ignorerait la cavite/l'insert
+            # et montrerait "Rose" comme une simple tranche pleine epaisseur)
+            # + un insert independant par materiau -- cf. mission 0.4.1 s10.
+            base_zone = next(
+                (z for z in self._project.scene.zones if z.composition_mode is CompositionMode.BASE), None
+            )
+            white_name = base_zone.material.name if base_zone is not None else "Blanc"
+            self._current_material_meshes = {
+                white_name: self._current_backlight_result.white_mesh,
+                **self._current_backlight_result.insert_meshes,
+            }
+        elif self._current_material_meshes is None:
             try:
                 self._current_material_meshes = partition_mesh_by_material(
                     self._build_zone_sources(),
@@ -1528,6 +1677,14 @@ class MainWindow(QMainWindow):
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
 
+        if self._current_backlight_result is not None:
+            # Un seul fichier STL ne suffit pas ici : le corps blanc et l'
+            # insert sont deux volumes physiquement separes a imprimer
+            # independamment (cf. mission 0.4.1 s11 -- lithophane_white.stl +
+            # rose_backlight_insert.stl au minimum).
+            self._on_export_backlight_stl_clicked()
+            return
+
         suggested_name = self._suggested_stl_filename()
         path, _ = QFileDialog.getSaveFileName(self, "Exporter en STL", suggested_name, "STL (*.stl)")
         if not path:
@@ -1543,6 +1700,26 @@ class MainWindow(QMainWindow):
         logger.info("STL exporte : %s", path)
         self.statusBar().showMessage(f"Export reussi : {path}", 8000)
         QMessageBox.information(self, "LithoShape3D", f"STL exporte avec succes :\n{path}")
+
+    def _on_export_backlight_stl_clicked(self) -> None:
+        materials = self._materials_for_display()
+        material_meshes = {name: mesh for name, (mesh, _color) in materials.items()}
+        base_name = self._slugify(self._project.name)
+        directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL (corps blanc + insert)")
+        if not directory:
+            return
+
+        try:
+            written = export_stl_per_material(material_meshes, directory, base_name=base_name)
+        except OSError as exc:
+            logger.exception("Echec de l'export STL Backlight Insert")
+            QMessageBox.critical(self, "LithoShape3D", f"Echec de l'export :\n{exc}")
+            return
+
+        names = "\n".join(str(p) for p in written)
+        logger.info("STL Backlight Insert exportes : %s", names)
+        self.statusBar().showMessage(f"Export reussi : {directory}", 8000)
+        QMessageBox.information(self, "LithoShape3D", f"STL exportes avec succes :\n{names}")
 
     def _on_export_multi_material_clicked(self) -> None:
         """3MF standard multi-objets en priorite (voir
