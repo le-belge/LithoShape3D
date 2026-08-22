@@ -5,6 +5,24 @@ historique la génération de lithophanies :
 
 Image → réglages visuels → aperçu → modèle imprimable → export
 
+**Version actuelle : 0.4.1.** Ce README couvre l'installation et l'usage de
+base. Pour la vision produit, l'état réel détaillé fonction par fonction,
+la roadmap et les décisions techniques, voir `docs/` :
+
+- [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md) —
+  état réel à jour (version, tests, plateformes testées, statut de chaque
+  fonction). Point d'entrée pour reprendre le projet.
+- [`docs/00_PRODUCT_BIBLE.md`](docs/00_PRODUCT_BIBLE.md) — vision produit.
+- [`docs/01_ROADMAP.md`](docs/01_ROADMAP.md) — trajectoire vers la 1.0.
+- [`docs/07_ARCHITECTURE.md`](docs/07_ARCHITECTURE.md) — architecture
+  technique réelle du dépôt.
+- [`docs/03_DECISIONS.md`](docs/03_DECISIONS.md) — pourquoi les grandes
+  décisions techniques ont été prises.
+
+Les sections ci-dessous décrivent l'installation et documentent l'historique
+des phases de développement ; elles ne sont pas mises à jour à chaque
+version — se référer à `docs/` pour l'état courant.
+
 ## LithoFusion 3D
 
 Évolution visée du projet : combiner lithophanie, relief 3D, formes
@@ -162,10 +180,12 @@ python scripts/benchmark_composition.py
 
 ## État actuel
 
-**Phase 2C — Composition multi-zones (LithoFusion).** Base + zones `ADD`/
-`REPLACE` se combinent en un unique mesh manifold (watertight, winding
-cohérent, 0 bord ouvert, compatible `manifold3d`), exportable en un seul
-STL. `core` reste strictement indépendant de Qt/PyVista/VTK (vérifié par
-test automatisé). Toujours pas de `SUBTRACT`, de segmentation IA, de
-formes non rectangulaires, de couleurs/AMS/3MF ni d'intégration Bambu
-Studio.
+Cette section historique s'arrêtait à la Phase 2C ; depuis, le projet a
+ajouté la segmentation IA (SAM2, macOS uniquement), les formes non
+rectangulaires (Shape Composer), les matériaux/couleurs et l'export 3MF
+multi-objets, et une stratégie couleur qui garantit qu'assigner un
+matériau ne modifie jamais la géométrie (Material Only) ainsi qu'un
+prototype expérimental d'insert rétro-éclairé indépendant (Backlight
+Insert). **Voir [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md)
+pour l'état réel, fonction par fonction, à jour à chaque version** — ce
+README n'est plus le document de référence pour l'état du produit.
