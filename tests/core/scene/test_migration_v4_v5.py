@@ -32,7 +32,7 @@ _V4_PROJECT = {
 def test_v4_migration_defaults_to_rectangle_shape():
     project = project_from_dict(copy.deepcopy(_V4_PROJECT))
 
-    assert project.format_version == 5
+    assert project.format_version == 6
     assert project.scene.shape.shape_type is ShapeType.RECTANGLE
 
 

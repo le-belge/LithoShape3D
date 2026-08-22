@@ -68,7 +68,7 @@ _V1_MULTI_ZONE_ATYPICAL = {
 def test_v1_single_zone_migrates_source_to_scene():
     project = project_from_dict(copy.deepcopy(_V1_SINGLE_ZONE))
 
-    assert project.format_version == 5  # migration chainee v1 -> v2 -> v3 -> v4 -> v5
+    assert project.format_version == 6  # migration chainee v1 -> v2 -> v3 -> v4 -> v5 -> v6
     assert project.scene.source_image_path == "images/photo.jpg"
     assert project.scene.zones[0].source_image_path is None  # promu, plus de doublon
     assert project.scene.zones[0].visible is True

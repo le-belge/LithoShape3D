@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from lithoshape3d.core.scene.models import (
+    BacklightInsertParams,
+    ColorStrategy,
     CompositionMode,
     GeometryParameters,
     ImageTransform,
@@ -28,7 +30,7 @@ from lithoshape3d.core.scene.models import (
     Zone,
 )
 
-CURRENT_FORMAT_VERSION = 5
+CURRENT_FORMAT_VERSION = 6
 
 
 def _transform_to_dict(transform: Transform) -> dict[str, Any]:
@@ -157,6 +159,23 @@ def _geometry_params_from_dict(data: dict[str, Any]) -> GeometryParameters:
     )
 
 
+def _backlight_insert_to_dict(params: BacklightInsertParams) -> dict[str, Any]:
+    return {
+        "white_skin_thickness_mm": params.white_skin_thickness_mm,
+        "insert_thickness_mm": params.insert_thickness_mm,
+        "xy_clearance_mm": params.xy_clearance_mm,
+    }
+
+
+def _backlight_insert_from_dict(data: dict[str, Any]) -> BacklightInsertParams:
+    defaults = BacklightInsertParams()
+    return BacklightInsertParams(
+        white_skin_thickness_mm=data.get("white_skin_thickness_mm", defaults.white_skin_thickness_mm),
+        insert_thickness_mm=data.get("insert_thickness_mm", defaults.insert_thickness_mm),
+        xy_clearance_mm=data.get("xy_clearance_mm", defaults.xy_clearance_mm),
+    )
+
+
 def _zone_to_dict(zone: Zone) -> dict[str, Any]:
     return {
         "id": zone.id,
@@ -169,11 +188,14 @@ def _zone_to_dict(zone: Zone) -> dict[str, Any]:
         "transform": _transform_to_dict(zone.transform),
         "relief_mode": zone.relief_mode.value,
         "composition_mode": zone.composition_mode.value,
+        "color_strategy": zone.color_strategy.value if zone.color_strategy is not None else None,
+        "backlight_insert": _backlight_insert_to_dict(zone.backlight_insert),
         "mesh_cache_path": zone.mesh_cache_path,
     }
 
 
 def _zone_from_dict(data: dict[str, Any]) -> Zone:
+    color_strategy_value = data.get("color_strategy")
     return Zone(
         id=data.get("id", None) or Zone().id,
         name=data.get("name", "zone"),
@@ -185,6 +207,8 @@ def _zone_from_dict(data: dict[str, Any]) -> Zone:
         transform=_transform_from_dict(data.get("transform", {})),
         relief_mode=ReliefMode(data.get("relief_mode", ReliefMode.LITHOPHANE.value)),
         composition_mode=CompositionMode(data.get("composition_mode", CompositionMode.ADD.value)),
+        color_strategy=ColorStrategy(color_strategy_value) if color_strategy_value is not None else None,
+        backlight_insert=_backlight_insert_from_dict(data.get("backlight_insert", {})),
         mesh_cache_path=data.get("mesh_cache_path"),
     )
 
@@ -291,11 +315,26 @@ def _migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
+    """Migration additive : ajoute Zone.color_strategy et
+    Zone.backlight_insert (Color Strategies / Backlight Insert, v0.4.1).
+    `color_strategy=None` explicite pour chaque zone existante -- comportement
+    historique intact (ReliefMode/CompositionMode font foi, comme avant cette
+    version), AUCUN changement de geometrie du seul fait de cette migration.
+    Voir `core/geometry/composition.py` pour l'effet exact de ColorStrategy."""
+    for zone_data in data.get("scene", {}).get("zones", []):
+        zone_data.setdefault("color_strategy", None)
+        zone_data.setdefault("backlight_insert", {})
+    data["format_version"] = 6
+    return data
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }
 
 

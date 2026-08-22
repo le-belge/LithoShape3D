@@ -44,7 +44,7 @@ def test_roundtrip_dict():
 def test_serialized_dict_carries_format_version():
     data = project_to_dict(_sample_project())
 
-    assert data["format_version"] == 5
+    assert data["format_version"] == 6
 
 
 def test_roundtrip_preserves_non_default_shape_and_image_transform():

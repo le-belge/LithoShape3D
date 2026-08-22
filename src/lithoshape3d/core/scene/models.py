@@ -241,4 +241,4 @@ class Scene:
 class Project:
     name: str = "untitled"
     scene: Scene = field(default_factory=Scene)
-    format_version: int = 5
+    format_version: int = 6
