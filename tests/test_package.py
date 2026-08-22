@@ -1,7 +1,7 @@
 def test_package_imports():
     import lithoshape3d
 
-    assert lithoshape3d.__version__ == "0.3.1"
+    assert lithoshape3d.__version__ == "0.4.0"
 
 
 def test_package_metadata_version_matches_module_version():
