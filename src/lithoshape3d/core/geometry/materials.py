@@ -31,11 +31,15 @@ from lithoshape3d.core.geometry.mesh_builder import (
     build_mesh_from_heightfield,
 )
 from lithoshape3d.core.image.preprocessing import resize_array
+from lithoshape3d.core.image.transform import apply_image_transform
 from lithoshape3d.core.scene.models import ImageTransform
 
 
 def _compose_cell_ownership(
-    zone_sources: list[ZoneSource], mask_threshold: float, shape_mask: np.ndarray | None
+    zone_sources: list[ZoneSource],
+    mask_threshold: float,
+    shape_mask: np.ndarray | None,
+    image_transform: ImageTransform | None = None,
 ) -> np.ndarray:
     """Retourne une grille (rows-1, cols-1) d'ids de Zone (ou None), un
     "proprietaire" par cellule -- meme regle de recouvrement et meme ordre
@@ -67,8 +71,17 @@ def _compose_cell_ownership(
         mask = source.mask
         if mask is None:
             mask = np.ones((rows, cols), dtype=np.float32)
-        elif mask.shape != (rows, cols):
-            mask = resize_array(mask, width_px=cols, height_px=rows)
+        elif image_transform is None:
+            if mask.shape != (rows, cols):
+                mask = resize_array(mask, width_px=cols, height_px=rows)
+        else:
+            # Meme regle qu'en composition (voir composition.py) : le
+            # masque doit subir le meme cadrage que la photo, sinon
+            # l'appartenance materiau d'une zone se detache du sujet des
+            # que la photo est deplacee/zoomee/tournee (cf. 2.12).
+            mask = apply_image_transform(
+                mask.astype(np.float32), image_transform, width_px=cols, height_px=rows, fill_value=0.0
+            )
         mask = np.flipud(mask)
 
         active = mask >= mask_threshold
@@ -101,7 +114,7 @@ def partition_mesh_by_material(
         return {material_name: build_mesh_from_heightfield(z_final, active_final, width_mm, height_mm)}
 
     base_source = next(s for s in visible_sources if s.zone.composition_mode.value == "base")
-    owner_cells = _compose_cell_ownership(zone_sources, mask_threshold, shape_mask)
+    owner_cells = _compose_cell_ownership(zone_sources, mask_threshold, shape_mask, image_transform)
 
     active_cells = active_final[:-1, :-1] & active_final[:-1, 1:] & active_final[1:, :-1] & active_final[1:, 1:]
     orphan_cells = active_cells & np.equal(owner_cells, None)

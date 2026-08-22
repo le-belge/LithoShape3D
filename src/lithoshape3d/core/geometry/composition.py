@@ -144,8 +144,20 @@ def compose_scene_heightfield(
         mask = source.mask
         if mask is None:
             mask = np.ones((rows, cols), dtype=np.float32)
-        elif mask.shape != (rows, cols):
-            mask = resize_array(mask, width_px=cols, height_px=rows)
+        elif image_transform is None:
+            if mask.shape != (rows, cols):
+                mask = resize_array(mask, width_px=cols, height_px=rows)
+        else:
+            # Le masque est peint en espace image source (meme repere que
+            # `raw` ci-dessus, cf. ui/main_window._on_edit_mask_clicked) : il
+            # doit subir EXACTEMENT le meme cadrage que la photo, sinon une
+            # zone (ex. la rose) se detache visuellement du sujet des que la
+            # photo est deplacee/zoomee/tournee dans la Shape (cf. 2.12). Un
+            # simple resize (chemin ci-dessus) ne suffit pas : il ne fait que
+            # changer la resolution, jamais recadrer.
+            mask = apply_image_transform(
+                mask.astype(np.float32), image_transform, width_px=cols, height_px=rows, fill_value=0.0
+            )
         mask = np.flipud(mask)
 
         active = (mask >= mask_threshold) & shape_active

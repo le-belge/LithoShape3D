@@ -15,6 +15,7 @@ from lithoshape3d.core.scene.models import (
     CompositionMode,
     GeometryParameters,
     ImageTransform,
+    ReliefMode,
     ShapeParams,
     ShapeType,
     Zone,
@@ -127,3 +128,92 @@ def test_image_transform_offset_shifts_bright_region(tmp_path):
     shifted = compose_scene_heightfield(sources, image_transform=ImageTransform(offset_x=0.4))
 
     assert not np.array_equal(default[0], shifted[0])
+
+
+def test_zone_mask_stays_aligned_with_photo_content_after_offset(tmp_path):
+    """Regression (2.12) : une Zone (ex. "la rose") peinte sur une region
+    precise de la photo doit suivre EXACTEMENT le meme cadrage que la photo
+    elle-meme -- sinon la matiere de la zone se detache visuellement du
+    sujet des que la photo est deplacee dans la Shape. Avant le correctif,
+    le masque de zone n'etait que redimensionne (jamais recadre), restant
+    fige a sa position d'origine independamment de `image_transform`.
+
+    Isole la contribution de la zone REPLACE ("Rose", epaisseur constante
+    distincte) de celle de la zone BASE (photo, epaisseur variable) via leur
+    valeur dans le champ de hauteur final -- inspecter `active_final` seul
+    ne suffirait pas : la zone BASE (masque plein par defaut) couvre deja
+    toute la grille et masquerait le signal."""
+    from PIL import Image
+
+    array = np.full((ROWS, COLS), 30, dtype=np.uint8)
+    array[10:30, 10:30] = 220  # "la rose" : carre clair en haut-gauche de la photo source
+    image_path = tmp_path / "rose.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    rose_mask = np.zeros((ROWS, COLS), dtype=np.float32)
+    rose_mask[10:30, 10:30] = 1.0  # masque peint exactement sur la rose, en espace image source
+
+    base_zone = _base_zone()
+    base_zone.relief_mode = ReliefMode.SOLID  # epaisseur constante (ignore l'image), distincte de la rose
+    base_zone.geometry_params.max_thickness_mm = 0.2
+
+    rose_zone = Zone(name="Rose", composition_mode=CompositionMode.REPLACE, geometry_params=_params())
+    rose_zone.relief_mode = ReliefMode.SOLID
+    rose_zone.geometry_params.max_thickness_mm = 2.5  # epaisseur constante, distincte de la base
+
+    transform = ImageTransform(offset_x=0.4)  # cadrage : deplace la photo vers la droite
+    sources = [
+        ZoneSource(zone=base_zone, image_path=str(image_path)),
+        ZoneSource(zone=rose_zone, image_path=str(image_path), mask=rose_mask),
+    ]
+
+    z_final, _active, _w, _h = compose_scene_heightfield(sources, image_transform=transform)
+
+    # position ORIGINALE (avant cadrage) de la rose, convertie en Y-up :
+    # doit desormais porter l'epaisseur de la BASE (la rose ne s'y trouve
+    # plus, la photo a ete decalee vers la droite).
+    original_rows_yup = slice(ROWS - 30, ROWS - 10)
+    assert np.allclose(z_final[original_rows_yup, 10:30], 0.2, atol=0.01)
+
+    # position TRANSFORMEE (decalage +0.4*COLS = +24 colonnes) : doit porter
+    # l'epaisseur de la ROSE -- la preuve que son masque a suivi le cadrage.
+    shift_px = round(0.4 * COLS)
+    shifted_cols = slice(10 + shift_px, 30 + shift_px)
+    assert np.allclose(z_final[original_rows_yup, shifted_cols], 2.5, atol=0.01)
+
+
+def test_partition_by_material_keeps_zone_aligned_with_photo_after_offset(tmp_path):
+    """Meme regression que ci-dessus, mais pour l'attribution materiau
+    (materials.py) : `partition_mesh_by_material` doit, elle aussi, recadrer
+    le masque de zone avant d'en deduire le proprietaire de chaque cellule."""
+    from PIL import Image
+
+    from lithoshape3d.core.geometry.materials import partition_mesh_by_material
+
+    array = np.full((ROWS, COLS), 30, dtype=np.uint8)
+    array[10:30, 10:30] = 220
+    image_path = tmp_path / "rose.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    rose_mask = np.zeros((ROWS, COLS), dtype=np.float32)
+    rose_mask[10:30, 10:30] = 1.0
+
+    base_zone = _base_zone()
+    base_zone.material.name = "Blanc"
+    rose_zone = Zone(name="Rose", composition_mode=CompositionMode.REPLACE, geometry_params=_params())
+    rose_zone.material.name = "Rose"
+    transform = ImageTransform(offset_x=0.4)
+    sources = [
+        ZoneSource(zone=base_zone, image_path=str(image_path)),
+        ZoneSource(zone=rose_zone, image_path=str(image_path), mask=rose_mask),
+    ]
+
+    meshes = partition_mesh_by_material(sources, image_transform=transform)
+
+    assert set(meshes.keys()) == {"Blanc", "Rose"}
+    # le corps "Rose" doit exister et etre positionne du cote DROIT de la
+    # grille (vers lequel le cadrage a deplace la photo), pas a sa colonne
+    # d'origine (gauche) -- sinon le decoupage materiau reste fige.
+    rose_mesh = meshes["Rose"]
+    center_x_mm = (rose_mesh.bounds[0][0] + rose_mesh.bounds[1][0]) / 2.0
+    assert center_x_mm > WIDTH_MM / 2.0
