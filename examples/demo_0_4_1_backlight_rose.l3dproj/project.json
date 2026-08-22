@@ -1,0 +1,140 @@
+{
+  "format_version": 6,
+  "name": "untitled",
+  "scene": {
+    "zones": [
+      {
+        "id": "f62e954f-c10a-4a78-811a-b4ecb60fe1ea",
+        "name": "Lithophanie",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": null,
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.8,
+          "max_thickness_mm": 3.0,
+          "invert": false,
+          "resolution": 0.5,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "Blanc",
+          "color": [
+            0.95,
+            0.95,
+            0.93
+          ],
+          "filament_type": null,
+          "translucent": false,
+          "slot": null
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "lithophane",
+        "composition_mode": "base",
+        "color_strategy": null,
+        "backlight_insert": {
+          "white_skin_thickness_mm": 0.4,
+          "insert_thickness_mm": 0.6,
+          "xy_clearance_mm": 0.2
+        },
+        "mesh_cache_path": null
+      },
+      {
+        "id": "c5140662-b8a2-446e-9012-b0a6b793a2a1",
+        "name": "Zone 2",
+        "visible": true,
+        "source_image_path": null,
+        "mask_path": "masks/c5140662-b8a2-446e-9012-b0a6b793a2a1.png",
+        "geometry_params": {
+          "width_mm": 100.0,
+          "height_mm": 133.33333333333331,
+          "min_thickness_mm": 0.8,
+          "max_thickness_mm": 3.0,
+          "invert": false,
+          "resolution": 0.5,
+          "base_shape": "rectangle"
+        },
+        "material": {
+          "name": "Rose",
+          "color": [
+            0.85,
+            0.08,
+            0.28
+          ],
+          "filament_type": null,
+          "translucent": false,
+          "slot": null
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "relief_mode": "lithophane",
+        "composition_mode": "add",
+        "color_strategy": "backlight_insert",
+        "backlight_insert": {
+          "white_skin_thickness_mm": 0.4,
+          "insert_thickness_mm": 0.6,
+          "xy_clearance_mm": 0.2
+        },
+        "mesh_cache_path": null
+      }
+    ],
+    "source_image_path": "source/demo_woman_rose_0_3.png",
+    "active_zone_id": "c5140662-b8a2-446e-9012-b0a6b793a2a1",
+    "support": {
+      "support_type": "flat",
+      "depth_mm": 25.0,
+      "height_mm": 8.0,
+      "overhang_left_mm": 5.0,
+      "overhang_right_mm": 5.0,
+      "rib_count": 3,
+      "rib_thickness_mm": 2.0
+    },
+    "shape": {
+      "shape_type": "rectangle",
+      "text": "",
+      "font_path": null,
+      "bold": false,
+      "source_image_path": null,
+      "border_width_mm": 0.0
+    },
+    "image_transform": {
+      "offset_x": 0.0,
+      "offset_y": 0.0,
+      "scale": 1.0,
+      "rotation_deg": 0.0,
+      "fit_mode": "fit"
+    }
+  }
+}
