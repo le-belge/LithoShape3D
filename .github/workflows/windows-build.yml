@@ -1,0 +1,46 @@
+name: Windows build & smoke test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[app]
+          pip install pyinstaller
+
+      - name: Run core test suite (headless, no Qt/PyVista)
+        run: pytest tests/core -q
+
+      - name: Build Windows executable
+        working-directory: packaging
+        run: pyinstaller lithoshape3d_windows.spec --noconfirm
+
+      - name: Smoke test - headless generate command (real end-to-end run)
+        shell: pwsh
+        run: |
+          python -c "from PIL import Image; Image.new('L', (64, 64), 128).save('smoke_test.png')"
+          & ".\packaging\dist\LithoShape3D\LithoShape3D.exe" generate smoke_test.png smoke_test.stl --width 20
+          if ($LASTEXITCODE -ne 0) { throw "LithoShape3D.exe generate a echoue (code $LASTEXITCODE)" }
+          if (-not (Test-Path smoke_test.stl)) { throw "STL non genere - le build ne fonctionne pas sur Windows" }
+          $size = (Get-Item smoke_test.stl).Length
+          if ($size -lt 100) { throw "STL genere mais suspicieusement petit ($size octets)" }
+          Write-Host "OK : build Windows fonctionnel, STL genere ($size octets)"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LithoShape3D-windows
+          path: packaging/dist/LithoShape3D/
