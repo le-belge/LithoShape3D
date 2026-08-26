@@ -32,8 +32,12 @@ jobs:
         shell: pwsh
         run: |
           python -c "from PIL import Image; Image.new('L', (64, 64), 128).save('smoke_test.png')"
-          & ".\packaging\dist\LithoShape3D\LithoShape3D.exe" generate smoke_test.png smoke_test.stl --width 20
-          if ($LASTEXITCODE -ne 0) { throw "LithoShape3D.exe generate a echoue (code $LASTEXITCODE)" }
+          # console=False (app GUI) : `&` ne bloque pas forcement l'attente du process enfant,
+          # Start-Process -Wait est la maniere fiable d'attendre sa fin reelle en PowerShell.
+          $proc = Start-Process -FilePath ".\packaging\dist\LithoShape3D\LithoShape3D.exe" `
+            -ArgumentList "generate", "smoke_test.png", "smoke_test.stl", "--width", "20" `
+            -NoNewWindow -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "LithoShape3D.exe generate a echoue (code $($proc.ExitCode))" }
           if (-not (Test-Path smoke_test.stl)) { throw "STL non genere - le build ne fonctionne pas sur Windows" }
           $size = (Get-Item smoke_test.stl).Length
           if ($size -lt 100) { throw "STL genere mais suspicieusement petit ($size octets)" }
