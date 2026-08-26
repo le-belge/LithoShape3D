@@ -24,7 +24,7 @@ governance").
 | Plateforme | État réel |
 |---|---|
 | macOS (Apple Silicon) | **DONE** — build PyInstaller reconstruit et lancé réellement à chaque release depuis 0.3.0 (process confirmé vivant, log applicatif écrit). Non signé/non notarisé. |
-| Windows | **BLOCKED** — `packaging/lithoshape3d_windows.spec` existe, toutes les dépendances ont des wheels `win_amd64`/Python 3.12 vérifiées sur PyPI, mais **aucune construction ni aucun lancement n'a jamais eu lieu sur une vraie machine Windows**. Bloqué faute de machine disponible dans les sessions jusqu'ici. |
+| Windows | **CI VÉRIFIÉ** (2026-08-27) — GitHub Actions (`.github/workflows/windows-build.yml`, `windows-latest`) exécute réellement : suite `tests/core` (passe), build PyInstaller via `packaging/lithoshape3d_windows.spec` (réussit), et un smoke test de bout en bout (le `.exe` packagé lance `generate` sur une image de test et produit un STL valide, vérifié non vide). Premier build/lancement réel sur Windows de l'histoire du projet. Pas encore vérifié : lancement de l'interface graphique elle-même (le smoke test couvre uniquement le chemin headless `core`, pas Qt/PyVista à l'écran) — reste à confirmer manuellement ou via un test GUI dédié. |
 | Linux | Non ciblé, non testé, non documenté comme objectif. |
 
 ## État des fonctions — statuts explicites
@@ -118,6 +118,55 @@ d'éventuels réglages d'impression suffisent. **Backlight Insert reste
 EXPERIMENTAL** jusqu'au PASS de ce test V2 — ne pas considérer DONE sur la
 seule base de la correction logicielle.
 
+#### Backlight Insert — PHYSICAL TEST #2, micro-coupon (2026-08-22)
+
+Le V2 55×53mm ci-dessus prenant ~2h à imprimer, un **micro-coupon**
+25×30mm (`examples/physical_validation/backlight_micro_coupon/`) a été créé
+à la place : **découpé directement dans le heightfield réel** du cas
+femme+rose (même photo, même clic de segmentation, même pipeline
+`compose_backlight_bodies` déjà corrigé en v0.4.2 — aucune géométrie
+recréée), fenêtre choisie automatiquement pour maximiser la plage
+d'épaisseur (0.87–2.89mm) et la présence du contour Backlight. Point
+important découvert en le préparant : **la lithophanie s'imprime
+verticalement** (le panneau debout sur son bord bas, l'axe hauteur devient
+l'axe Z d'impression) — donc le défaut n'est probablement pas un pont
+horizontal classique mais une paroi verticale fine (~0.40mm) qui doit
+suivre un contour organique changeant à chaque couche. Temps d'impression
+réel : ~20 minutes.
+
+**Résultat : FAIL, défaut reproduit.** Photos du coupon imprimé (fournies
+par l'utilisateur) : plusieurs perforations/ouvertures nettes sur la
+façade, concentrées dans les creux/replis du relief de la rose (zones les
+plus fines localement), plus des bords légèrement irréguliers/effilochés
+sur deux côtés. Le coupon a bien capturé le défaut à petite échelle et en
+20 minutes au lieu de 2h — confirmé comme outil d'itération utile pour la
+suite.
+
+Investigation dans Bambu Studio (avant impression, sur ce même coupon,
+profil "0.16mm Optimal X1C - litho") :
+- Largeur de mur (0.44–0.45mm) > peau demandée (0.40mm), "Détecter les
+  parois fines" grisé/non activable (mode 99 parois). **Test A/B fait** :
+  réduire les parois de 99 à 3 n'a produit **aucun changement visible**
+  dans le tracé de la couche inspectée — piste affaiblie, pas confirmée
+  comme mécanisme direct.
+- Avertissement Bambu "régions flottantes" présent, mais les zones
+  "Mur en surplomb" identifiées (mode d'affichage "Type de ligne") sont
+  concentrées sur les **bords de découpe du coupon** (artefact de
+  l'extraction d'une fenêtre dans un champ de hauteur plus grand), pas
+  dispersées dans le contour organique de la rose comme l'hypothèse le
+  prévoyait.
+
+**Conclusion mise à jour** : la cause dominante reste très probablement
+**physique/impression** (paroi verticale fine suivant un contour
+organique complexe, hypothèse D), mais ni les réglages de parois fines ni
+les surplombs détectés par le slicer n'expliquent le défaut de façon nette
+dans cette investigation — les signaux statiques du slicer ont montré
+leurs limites, l'impression réelle reste la source de vérité la plus
+informative à ce stade. **Backlight Insert reste EXPERIMENTAL**, échec
+confirmé sur deux tests physiques distincts (démo complète + micro-coupon)
+après le hotfix géométrique v0.4.2 — le bug géométrique corrigé n'était
+définitivement pas la cause principale.
+
 ### Projet / plateforme
 
 | Fonction | Statut | Note |
@@ -130,7 +179,7 @@ seule base de la correction logicielle.
 | i18n (architecture de traduction) | TODO | recherche exhaustive : aucun `QTranslator`/`tr()`/fichier `.ts` — l'app est **100% française, codée en dur**, zéro infrastructure de traduction |
 | Licensing / protection commerciale | TODO | aucune trace dans le code (recherche exhaustive) |
 | Packaging macOS | DONE | |
-| Packaging Windows | BLOCKED | voir tableau plateformes ci-dessus |
+| Packaging Windows | IMPLEMENTED_NOT_FIELD_VALIDATED | build+smoke test headless vérifiés en CI (voir tableau plateformes ci-dessus), jamais lancé/utilisé manuellement par un humain sur une vraie machine Windows |
 | Onboarding utilisateur | TODO | aucun tutoriel/premier lancement guidé |
 
 ## Dette technique identifiée pendant l'audit (non traitée — hors scope de cette mission)
