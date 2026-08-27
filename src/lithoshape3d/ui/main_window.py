@@ -94,6 +94,15 @@ PRESETS: dict[str, dict[str, float]] = {
     "Standard": {"resolution": 0.3, "min_thickness_mm": 0.8, "max_thickness_mm": 3.0},
     "Fine": {"resolution": 0.15, "min_thickness_mm": 0.6, "max_thickness_mm": 3.0},
     "Draft": {"resolution": 0.6, "min_thickness_mm": 1.0, "max_thickness_mm": 3.0},
+    # Boitier tiers "Cadre Lithophane CMYK Bambu" (hugo.workshop, MakerWorld
+    # #1036463) -- epaisseur max 3.2mm = jeu exact de la fente du cadre pour
+    # une litho mono. La largeur seule ne garantit pas 104mm de hauteur (la
+    # hauteur suit toujours le ratio de la photo, cf. _current_geometry_parameters) :
+    # cadrer la photo en 140:104 (~1.346:1) via Forme > Rectangle pour un
+    # ajustement exact au cadre.
+    "LithoGift Bambu Mono (140x104mm)": {
+        "resolution": 0.2, "min_thickness_mm": 0.8, "max_thickness_mm": 3.2, "width_mm": 140.0,
+    },
 }
 
 _STATE_MESSAGES = {
@@ -1466,6 +1475,8 @@ class MainWindow(QMainWindow):
         self.resolution_spin.setValue(preset["resolution"])
         self.min_thickness_spin.setValue(preset["min_thickness_mm"])
         self.max_thickness_spin.setValue(preset["max_thickness_mm"])
+        if "width_mm" in preset:
+            self.width_spin.setValue(preset["width_mm"])
 
     def _current_geometry_parameters(self) -> GeometryParameters:
         height_mm = height_mm_from_aspect_ratio(

@@ -184,3 +184,29 @@ def test_switching_zone_does_not_corrupt_relief_or_composition_mode(main_window,
     assert zone_a.composition_mode is CompositionMode.BASE
     assert zone_b.relief_mode is ReliefMode.SOLID
     assert zone_b.composition_mode is CompositionMode.ADD
+
+
+def test_lithogift_bambu_mono_preset_sets_width_and_thickness_for_the_frame_slot(main_window, tmp_path):
+    """Preset boitier tiers (hugo.workshop, MakerWorld #1036463) : la fente
+    du cadre attend 3.2mm max pour une litho mono -- doit rester exact."""
+    _load(main_window, tmp_path)
+    main_window.width_spin.setValue(999.0)  # valeur witness, doit etre ecrasee par le preset
+
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    assert main_window.width_spin.value() == 140.0
+    assert main_window.max_thickness_spin.value() == 3.2
+    assert main_window.min_thickness_spin.value() == 0.8
+    assert main_window.resolution_spin.value() == 0.2
+
+
+def test_quality_only_presets_do_not_touch_width(main_window, tmp_path):
+    """Les presets qualite existants (Standard/Fine/Draft) n'ont pas de
+    width_mm -- ne doivent jamais toucher la largeur deja choisie par
+    l'utilisateur (comportement inchange, non-regression)."""
+    _load(main_window, tmp_path)
+    main_window.width_spin.setValue(77.0)
+
+    main_window._apply_preset("Standard")
+
+    assert main_window.width_spin.value() == 77.0
