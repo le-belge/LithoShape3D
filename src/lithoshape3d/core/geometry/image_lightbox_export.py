@@ -183,7 +183,6 @@ def generate_lightbox_from_image(
     )
     from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_polygon_mask
     from lithoshape3d.core.geometry.lightbox import build_lightbox_lithophane_face_mesh
-    from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
     from lithoshape3d.core.geometry.vector_lightbox import (
         SHOULDER_DEPTH_MM,
         build_vector_lightbox_back_panel_mesh,
@@ -272,11 +271,18 @@ def generate_lightbox_from_image(
     output_dir.mkdir(parents=True, exist_ok=True)
     slug = _slug_from_path(image_path)
 
-    # Corps : extrusion directe du contour vectoriel exact de la silhouette
-    # (parois lisses + epaulement de retention du capot) -- meme moteur que
-    # LightBox Letters, voir `vector_lightbox.py`.
+    # Corps AVEC fond integre : extrusion directe du contour vectoriel exact
+    # de la silhouette (parois lisses + epaulement de retention du capot),
+    # cavite basse partant de `back_thickness_mm` au lieu de Z=0 -- le fond
+    # fait donc partie de la MEME extrusion/soustraction, pas d'union
+    # booleenne post-hoc entre deux meshes separes (fragile sur des contours
+    # complexes/multi-composantes -- triangles degeneres constates sur un
+    # logo tres detaille). Meme moteur que LightBox Letters, voir
+    # `vector_lightbox.py`.
     try:
-        body_mesh, body_warnings = build_vector_lightbox_body_mesh(outer, depth_mm, wall_thickness_mm)
+        body_mesh, body_warnings = build_vector_lightbox_body_mesh(
+            outer, depth_mm, wall_thickness_mm, back_thickness_mm=back_thickness_mm
+        )
     except ValueError as exc:
         result.messages.append(("error", f"corps : {exc}"))
         return result
@@ -289,30 +295,8 @@ def generate_lightbox_from_image(
             ("error", f"validation corps : {', '.join(body_validation.issues())}")
         )
         return result
-
-    # Fond fusionne au corps par union booleene (meme moteur manifold3d que
-    # le reste du pipeline) : le corps seul n'a pas de fond (cavite ouverte
-    # par le bas, voir vector_lightbox.py), donc les exporter separement
-    # produisait deux pieces a assembler/coller -- retour utilisateur : "le
-    # fond et la box ne doivent faire qu'une piece".
-    try:
-        back_panel_mesh = build_vector_lightbox_back_panel_mesh(outer, back_thickness_mm)
-    except ValueError as exc:
-        result.messages.append(("error", f"fond : {exc}"))
-        back_panel_mesh = None
-
-    combined_body_mesh = body_mesh
-    if back_panel_mesh is not None:
-        combined_body_mesh = _from_manifold(_to_manifold(body_mesh) + _to_manifold(back_panel_mesh))
-
-    combined_validation = validate_mesh(combined_body_mesh)
-    if not combined_validation.is_valid:
-        result.messages.append(
-            ("error", f"validation corps+fond : {', '.join(combined_validation.issues())}")
-        )
-        return result
     body_path = output_dir / f"{slug}_corps.stl"
-    export_stl(combined_body_mesh, body_path)
+    export_stl(body_mesh, body_path)
     result.written.append(body_path)
 
     # Capot : plat/lisse par defaut, lithophanie si une image est fournie,
@@ -370,11 +354,21 @@ def generate_lightbox_from_image(
             # une union == footprint et une intersection vide entre les deux.
             color_a_polygon = ink_polygon.intersection(cap_polygon)
             color_b_polygon = cap_polygon.difference(ink_polygon)
+            # Aire de reference pour filtrer les esquilles degenerees issues
+            # de la booleenne (contours d'encre tres detailles/nombreux --
+            # cf. Thunderdome) : sans ce filtrage, `extrude_polygon` peut
+            # produire des triangles quasi-nuls et un mesh non watertight.
+            min_piece_area_mm2 = max(cap_polygon.area * 0.0002, 0.01)
             any_piece_written = False
             for label, piece_polygon in (("a", color_a_polygon), ("b", color_b_polygon)):
                 if isinstance(piece_polygon, GeometryCollection):
                     polys = [g for g in piece_polygon.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
                     piece_polygon = unary_union(polys) if polys else None
+                if piece_polygon is not None and not piece_polygon.is_empty:
+                    piece_polygon = piece_polygon.buffer(0)
+                if piece_polygon is not None and piece_polygon.geom_type == "MultiPolygon":
+                    kept = [g for g in piece_polygon.geoms if g.area >= min_piece_area_mm2]
+                    piece_polygon = unary_union(kept) if kept else None
                 if piece_polygon is None or piece_polygon.is_empty or piece_polygon.area <= 0:
                     result.messages.append(
                         ("warning", f"capot couleur {label} ignore (aire nulle a cette resolution).")

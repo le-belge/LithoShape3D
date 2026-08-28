@@ -151,14 +151,19 @@ def build_lightbox_letter_body_mesh(
     *,
     shoulder_depth_mm: float = SHOULDER_DEPTH_MM,
     shoulder_width_mm: float = SHOULDER_WIDTH_MM,
+    back_thickness_mm: float = 0.0,
 ) -> tuple[trimesh.Trimesh, list[str]]:
-    """Construit le corps (parois seules, sans fond -- meme convention que
-    `build_lightbox_body_mesh` V1) d'un caisson de lettre par EXTRUSION
-    DIRECTE du contour vectoriel exact (`letter.to_shapely()`), au lieu de
-    repasser par le pipeline heightfield/raster voxelise utilise par
-    `build_lightbox_body_mesh`. Parois lisses suivant le vrai contour de la
-    lettre. Inclut un epaulement en haut du corps (cavite retrecie sur
+    """Construit le corps d'un caisson de lettre par EXTRUSION DIRECTE du
+    contour vectoriel exact (`letter.to_shapely()`), au lieu de repasser par
+    le pipeline heightfield/raster voxelise utilise par
+    `build_lightbox_body_mesh` (V1). Parois lisses suivant le vrai contour
+    de la lettre. Inclut un epaulement en haut du corps (cavite retrecie sur
     `shoulder_depth_mm`) sur lequel le capot vient s'encastrer.
+
+    `back_thickness_mm` (>0) : fond integre DIRECTEMENT dans cette meme
+    extrusion (voir `vector_lightbox.build_vector_lightbox_body_mesh`) --
+    plus robuste qu'une union booleenne post-hoc entre corps et fond
+    construits separement.
 
     Fonction ADDITIVE et INDEPENDANTE de `build_lightbox_body_mesh`
     (`lightbox.py`) : ne modifie en rien le comportement de
@@ -171,6 +176,7 @@ def build_lightbox_letter_body_mesh(
         wall_thickness_mm,
         shoulder_depth_mm=shoulder_depth_mm,
         shoulder_width_mm=shoulder_width_mm,
+        back_thickness_mm=back_thickness_mm,
     )
 
 
@@ -237,7 +243,6 @@ def generate_lightbox_letters(
         build_lightbox_solid_face_mesh,
     )
     from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_polygon_mask
-    from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
     from lithoshape3d.core.validation.mesh_checks import validate_mesh
     import dataclasses
     import trimesh
@@ -292,13 +297,19 @@ def generate_lightbox_letters(
 
         prefix = f"{slug}_lettre_{letter.index}_{letter.character.lower()}"
 
-        # Corps : extrusion directe du contour vectoriel exact de la lettre
-        # (parois lisses + epaulement de retention du capot), au lieu du
-        # pipeline heightfield/raster voxelise de `build_lightbox_from_shape_mask`
-        # (V1, toujours utilise tel quel par `lightbox-text`).
+        # Corps AVEC fond integre : extrusion directe du contour vectoriel
+        # exact de la lettre (parois lisses + epaulement de retention du
+        # capot, cavite basse partant de `back_thickness_mm` au lieu de
+        # Z=0), au lieu du pipeline heightfield/raster voxelise de
+        # `build_lightbox_from_shape_mask` (V1, toujours utilise tel quel
+        # par `lightbox-text`). Le fond fait partie de la MEME
+        # extrusion/soustraction plutot que d'une union booleene post-hoc
+        # entre deux meshes separes (fragile sur des contours complexes --
+        # triangles degeneres constates) -- retour utilisateur : "le fond et
+        # la box ne doivent faire qu'une piece".
         try:
             body_mesh, body_warnings = build_lightbox_letter_body_mesh(
-                letter, depth_mm, wall_thickness_mm
+                letter, depth_mm, wall_thickness_mm, back_thickness_mm=back_thickness_mm
             )
         except ValueError as exc:
             result.messages.append(
@@ -318,39 +329,8 @@ def generate_lightbox_letters(
                 )
             )
             continue
-
-        # Fond fusionne au corps par union booleene (meme moteur manifold3d
-        # que le reste du pipeline) : le corps seul n'a pas de fond (cavite
-        # ouverte par le bas, voir vector_lightbox.py), donc les exporter
-        # separement produisait deux pieces a assembler/coller -- retour
-        # utilisateur : "le fond et la box ne doivent faire qu'une piece".
-        # Une seule union ici (au lieu d'une extrusion "corps+fond" dediee)
-        # reutilise directement les deux extrusions vectorielles existantes
-        # sans dupliquer le moteur d'extrusion.
-        try:
-            back_panel_mesh = build_lightbox_letter_back_panel_mesh(letter, back_thickness_mm)
-        except ValueError as exc:
-            result.messages.append(
-                ("error", f"fond lettre '{letter.character}' (#{letter.index}) : {exc}")
-            )
-            back_panel_mesh = None
-
-        combined_body_mesh = body_mesh
-        if back_panel_mesh is not None:
-            combined_body_mesh = _from_manifold(_to_manifold(body_mesh) + _to_manifold(back_panel_mesh))
-
-        combined_validation = validate_mesh(combined_body_mesh)
-        if not combined_validation.is_valid:
-            result.messages.append(
-                (
-                    "error",
-                    f"validation corps+fond lettre '{letter.character}' : "
-                    f"{', '.join(combined_validation.issues())}",
-                )
-            )
-            continue
         body_path = output_dir / f"{prefix}_corps.stl"
-        export_stl(combined_body_mesh, body_path)
+        export_stl(body_mesh, body_path)
         result.written.append(body_path)
 
         # Capot : retreci pour s'emboiter dans l'epaulement du corps (voir

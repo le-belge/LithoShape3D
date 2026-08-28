@@ -93,11 +93,22 @@ def build_vector_lightbox_body_mesh(
     *,
     shoulder_depth_mm: float = SHOULDER_DEPTH_MM,
     shoulder_width_mm: float = SHOULDER_WIDTH_MM,
+    back_thickness_mm: float = 0.0,
 ) -> tuple[trimesh.Trimesh, list[str]]:
-    """Construit le corps (parois seules, sans fond) d'un caisson par
-    EXTRUSION DIRECTE d'un contour vectoriel Shapely EXACT (pas de
-    rasterisation), avec un epaulement en haut du corps (cavite retrecie
-    sur `shoulder_depth_mm`) sur lequel le capot vient s'encastrer.
+    """Construit le corps d'un caisson par EXTRUSION DIRECTE d'un contour
+    vectoriel Shapely EXACT (pas de rasterisation), avec un epaulement en
+    haut du corps (cavite retrecie sur `shoulder_depth_mm`) sur lequel le
+    capot vient s'encastrer.
+
+    `back_thickness_mm` (>0) : le fond est integre DIRECTEMENT dans cette
+    meme extrusion/soustraction (la cavite basse ne part plus de Z=0 mais de
+    `back_thickness_mm`) plutot que fusionne apres coup par une union
+    booleenne de deux meshes deja construits -- une union post-hoc entre
+    l'exterieur plein et un panneau separe s'est revelee numeriquement
+    fragile sur des contours complexes/multi-composantes (triangles
+    degeneres a la jonction, cf. retour utilisateur sur un logo tres
+    detaille) alors qu'une seule extrusion+soustraction reste robuste,
+    identique en substance au reste de ce moteur.
 
     `outer` : contour exterieur du caisson (`Polygon` ou `MultiPolygon`,
     typiquement `LetterGlyph.to_shapely()` ou `ImageShapeResult.polygon`) --
@@ -113,12 +124,15 @@ def build_vector_lightbox_body_mesh(
         raise ValueError("Contour degenere : corps impossible.")
 
     shoulder_top = max(depth_mm - shoulder_depth_mm, eps)
+    cavity_bottom = max(back_thickness_mm, 0.0)
 
     cavity_meshes = []
 
     inner_lower = outer.buffer(-wall_thickness_mm)
-    lower_height = shoulder_top + 2 * eps
-    lower_mesh = _extrude_geom(inner_lower, lower_height, -eps) if lower_height > 0 else None
+    lower_height = (shoulder_top - cavity_bottom) + 2 * eps
+    lower_mesh = (
+        _extrude_geom(inner_lower, lower_height, cavity_bottom - eps) if lower_height > 0 else None
+    )
     if lower_mesh is not None:
         cavity_meshes.append(lower_mesh)
     else:
