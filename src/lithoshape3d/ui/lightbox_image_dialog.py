@@ -263,7 +263,7 @@ class LightboxImageDialog(QDialog):
     # ------------------------------------------------------------------ #
     def _choose_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Image source", "", "Images (*.png *.jpg *.jpeg *.svg)"
+            self, "Image source", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp *.svg)"
         )
         if not path:
             return
@@ -366,7 +366,7 @@ class LightboxImageDialog(QDialog):
             return
 
         path, _ = QFileDialog.getOpenFileName(
-            self, "Image de lithophanie (capot)", "", "Images (*.png *.jpg *.jpeg)"
+            self, "Image de lithophanie (capot)", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if not path:
             return
