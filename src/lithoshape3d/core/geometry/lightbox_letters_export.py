@@ -39,6 +39,88 @@ class LightboxLettersResult:
         return bool(self.written)
 
 
+def narrowest_part_mm(letter) -> float:
+    """Largeur (mm) de la composante la plus etroite d'une lettre extraite.
+
+    C'est le vrai facteur limitant pour la paroi d'un caisson (ex. la barre
+    du "i"), pas la bbox globale du glyphe qui peut inclure plusieurs
+    composantes disjointes largement espacees. Factorise pour etre reutilise
+    tel quel par `generate_lightbox_letters` (rejet reel a la generation) et
+    par l'UI (avertissement indicatif avant de lancer la generation)."""
+    return min(
+        (max(p[0] for p in part.exterior) - min(p[0] for p in part.exterior))
+        for part in letter.parts
+    )
+
+
+def compute_word_layout_and_grid(
+    text: str,
+    font_path: str,
+    font_size_mm: float,
+    *,
+    resolution: float | None = None,
+    min_thickness_mm: float | None = None,
+    max_thickness_mm: float | None = None,
+):
+    """Calcule le `WordLayout` (contours par lettre) et la grille (rows,
+    cols) associee, exactement comme `generate_lightbox_letters` -- factorise
+    ici pour que l'UI puisse rasteriser le masque d'UNE lettre (ex. pour le
+    cadrage visuel de son image) sans dupliquer cette glue."""
+    from dataclasses import fields
+
+    from lithoshape3d.core.geometry.heightmap import grid_dimensions
+    from lithoshape3d.core.geometry.letter_glyph_extractor import extract_word_glyphs
+
+    gp_defaults = {f.name: f.default for f in fields(GeometryParameters)}
+    if resolution is None:
+        resolution = gp_defaults["resolution"]
+    if min_thickness_mm is None:
+        min_thickness_mm = gp_defaults["min_thickness_mm"]
+    if max_thickness_mm is None:
+        max_thickness_mm = gp_defaults["max_thickness_mm"]
+
+    layout = extract_word_glyphs(text, font_path, font_size_mm=font_size_mm)
+    face_params = GeometryParameters(
+        width_mm=layout.width_mm,
+        height_mm=layout.height_mm,
+        min_thickness_mm=min_thickness_mm,
+        max_thickness_mm=max_thickness_mm,
+        resolution=resolution,
+    )
+    rows, cols = grid_dimensions(face_params)
+    return layout, face_params, rows, cols
+
+
+def letter_wall_thickness_ok(letter, wall_thickness_mm: float) -> bool:
+    """True si la lettre est assez epaisse pour la paroi demandee -- meme
+    seuil (2x l'epaisseur de paroi) que le garde-fou de generation reelle."""
+    return narrowest_part_mm(letter) >= wall_thickness_mm * 2
+
+
+def rasterize_letter_shape_mask_for_index(
+    text: str,
+    font_path: str,
+    font_size_mm: float,
+    index: int,
+    *,
+    resolution: float | None = None,
+):
+    """Rasterise le masque de la lettre `index` de `text` dans le meme
+    referentiel (canvas du mot entier) que `generate_lightbox_letters` --
+    utilise par l'UI pour le cadrage visuel image/lettre (meme masque que
+    celui qui sera reellement utilise a la generation, aucune duplication du
+    calcul de layout)."""
+    from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_letter_mask
+
+    layout, _face_params, rows, cols = compute_word_layout_and_grid(
+        text, font_path, font_size_mm, resolution=resolution
+    )
+    letter = next((letter for letter in layout.letters if letter.index == index), None)
+    if letter is None:
+        raise ValueError(f"Aucune lettre a l'index {index} pour le texte '{text}'.")
+    return rasterize_letter_mask(letter, layout.width_mm, layout.height_mm, rows, cols)
+
+
 def generate_lightbox_letters(
     text: str,
     font_path: str,
@@ -67,38 +149,26 @@ def generate_lightbox_letters(
         LightBoxParameters,
         build_lightbox_from_shape_mask,
     )
-    from lithoshape3d.core.geometry.letter_glyph_extractor import (
-        extract_word_glyphs,
-        rasterize_letter_mask,
-    )
-    from lithoshape3d.core.geometry.heightmap import grid_dimensions
+    from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_letter_mask
     from lithoshape3d.core.validation.mesh_checks import validate_mesh
     import trimesh
-
-    gp_defaults = {f.name: f.default for f in __import__("dataclasses").fields(GeometryParameters)}
-    if resolution is None:
-        resolution = gp_defaults["resolution"]
-    if min_thickness_mm is None:
-        min_thickness_mm = gp_defaults["min_thickness_mm"]
-    if max_thickness_mm is None:
-        max_thickness_mm = gp_defaults["max_thickness_mm"]
 
     images_by_index = images_by_index or {}
     transforms_by_index = transforms_by_index or {}
 
     result = LightboxLettersResult()
 
-    layout = extract_word_glyphs(text, font_path, font_size_mm=font_size_mm)
+    layout, face_params, rows, cols = compute_word_layout_and_grid(
+        text,
+        font_path,
+        font_size_mm,
+        resolution=resolution,
+        min_thickness_mm=min_thickness_mm,
+        max_thickness_mm=max_thickness_mm,
+    )
     for warning in layout.warnings:
         result.messages.append(("warning", warning))
 
-    face_params = GeometryParameters(
-        width_mm=layout.width_mm,
-        height_mm=layout.height_mm,
-        min_thickness_mm=min_thickness_mm,
-        max_thickness_mm=max_thickness_mm,
-        resolution=resolution,
-    )
     box_params_lithophane = LightBoxParameters(
         depth_mm=depth_mm,
         wall_thickness_mm=wall_thickness_mm,
@@ -112,8 +182,6 @@ def generate_lightbox_letters(
         face_mode=LightBoxFaceMode.SOLID,
     )
 
-    rows, cols = grid_dimensions(face_params)
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -125,21 +193,13 @@ def generate_lightbox_letters(
                 ("warning", f"lettre '{letter.character}' (#{letter.index}): {w}")
             )
 
-        min_wall = wall_thickness_mm
-        # La composante la plus fine (ex. la barre du "i") est le vrai
-        # facteur limitant, pas la bbox globale du glyphe (qui peut inclure
-        # plusieurs composantes disjointes largement espacees).
-        narrowest_part = min(
-            (max(p[0] for p in part.exterior) - min(p[0] for p in part.exterior))
-            for part in letter.parts
-        )
-        if narrowest_part < min_wall * 2:
+        if not letter_wall_thickness_ok(letter, wall_thickness_mm):
             result.messages.append(
                 (
                     "warning",
                     f"lettre '{letter.character}' (#{letter.index}) trop fine "
-                    f"({narrowest_part:.2f} mm) pour l'epaisseur de paroi demandee "
-                    f"({min_wall} mm) -- caisson ignore pour cette lettre.",
+                    f"({narrowest_part_mm(letter):.2f} mm) pour l'epaisseur de paroi demandee "
+                    f"({wall_thickness_mm} mm) -- caisson ignore pour cette lettre.",
                 )
             )
             continue

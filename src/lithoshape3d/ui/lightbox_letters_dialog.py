@@ -3,14 +3,21 @@ generation que la commande CLI `lithoshape3d lightbox-letters`, sans taper
 de commande. Reutilise directement `generate_lightbox_letters`
 (core/geometry/lightbox_letters_export.py), la meme fonction que le CLI --
 aucune logique de generation dupliquee ici, seulement de la construction de
-formulaire et un worker Qt pour ne pas geler l'UI pendant l'export."""
+formulaire et un worker Qt pour ne pas geler l'UI pendant l'export.
+
+Flux image/lettre (retour utilisateur : trop de clics, pas assez visuel) :
+un seul bouton "Image..." par lettre enchaine selection de fichier ->
+cadrage visuel (glisser/molette, `CadrageDialog` reutilise tel quel) ->
+retour a la liste, sans dialogue intermediaire separe."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -31,10 +38,17 @@ from PySide6.QtWidgets import (
 
 from lithoshape3d.core.geometry.lightbox_letters_export import (
     LightboxLettersResult,
+    compute_word_layout_and_grid,
     generate_lightbox_letters,
+    letter_wall_thickness_ok,
+    rasterize_letter_shape_mask_for_index,
 )
+from lithoshape3d.core.scene.models import ImageTransform
+from lithoshape3d.ui.fonts import discover_bold_fonts
 
 logger = logging.getLogger("lithoshape3d.ui.lightbox_letters")
+
+_CUSTOM_FONT_LABEL = "Parcourir un fichier .ttf/.otf..."
 
 
 class _LightboxLettersSignals(QObject):
@@ -72,12 +86,14 @@ class LightboxLettersDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("LightBox Letters")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
         self._font_path: str = ""
         self._output_dir: str = ""
         self._image_by_index: dict[int, str] = {}
+        self._transform_by_index: dict[int, ImageTransform] = {}
         self._thread_pool = QThreadPool.globalInstance()
+        self._bold_fonts = discover_bold_fonts()
 
         layout = QVBoxLayout(self)
 
@@ -87,13 +103,21 @@ class LightboxLettersDialog(QDialog):
         self.text_edit.textChanged.connect(self._on_text_changed)
         form.addRow("Mot", self.text_edit)
 
-        font_row = QHBoxLayout()
-        self.font_label = QLabel("(aucune police selectionnee)")
-        font_button = QPushButton("Choisir une police...")
-        font_button.clicked.connect(self._choose_font)
-        font_row.addWidget(self.font_label, 1)
-        font_row.addWidget(font_button)
-        form.addRow("Police (.ttf/.otf)", font_row)
+        self.font_combo = QComboBox()
+        for display_name, path in self._bold_fonts:
+            self.font_combo.addItem(display_name, path)
+        self.font_combo.addItem(_CUSTOM_FONT_LABEL, "")
+        self.font_combo.currentIndexChanged.connect(self._on_font_combo_changed)
+        form.addRow("Police (grasse recommandee)", self.font_combo)
+
+        self.font_path_label = QLabel("(aucune police selectionnee)")
+        self.font_path_label.setWordWrap(True)
+        form.addRow("", self.font_path_label)
+
+        self.thickness_warning_label = QLabel("")
+        self.thickness_warning_label.setWordWrap(True)
+        self.thickness_warning_label.setStyleSheet("color: #b45309;")
+        form.addRow("", self.thickness_warning_label)
 
         output_row = QHBoxLayout()
         self.output_label = QLabel("(aucun dossier selectionne)")
@@ -107,6 +131,7 @@ class LightboxLettersDialog(QDialog):
         self.font_size_spin.setRange(5.0, 500.0)
         self.font_size_spin.setValue(40.0)
         self.font_size_spin.setSuffix(" mm")
+        self.font_size_spin.valueChanged.connect(self._on_thickness_relevant_changed)
         form.addRow("Taille de corps", self.font_size_spin)
 
         self.depth_spin = QDoubleSpinBox()
@@ -120,6 +145,7 @@ class LightboxLettersDialog(QDialog):
         self.wall_spin.setSingleStep(0.1)
         self.wall_spin.setValue(1.6)
         self.wall_spin.setSuffix(" mm")
+        self.wall_spin.valueChanged.connect(self._on_thickness_relevant_changed)
         form.addRow("Epaisseur des parois", self.wall_spin)
 
         layout.addLayout(form)
@@ -149,17 +175,31 @@ class LightboxLettersDialog(QDialog):
         layout.addWidget(buttons)
 
         self._refresh_letters_list()
+        if self._bold_fonts:
+            self.font_combo.setCurrentIndex(0)
+            self._on_font_combo_changed(0)
 
     # ------------------------------------------------------------------ #
     # Selection police / dossier / images
     # ------------------------------------------------------------------ #
-    def _choose_font(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Choisir une police", "", "Polices (*.ttf *.otf)"
-        )
-        if path:
-            self._font_path = path
-            self.font_label.setText(path)
+    def _on_font_combo_changed(self, combo_index: int) -> None:
+        path = self.font_combo.itemData(combo_index)
+        if not path:
+            # "Parcourir..." : ouvre le selecteur de fichier custom, en
+            # conservant l'option existante intacte.
+            chosen, _ = QFileDialog.getOpenFileName(
+                self, "Choisir une police", "", "Polices (*.ttf *.otf)"
+            )
+            if chosen:
+                self._font_path = chosen
+                self.font_path_label.setText(chosen)
+            elif not self._font_path:
+                self.font_path_label.setText("(aucune police selectionnee)")
+            self._on_thickness_relevant_changed()
+            return
+        self._font_path = path
+        self.font_path_label.setText(path)
+        self._on_thickness_relevant_changed()
 
     def _choose_output_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Dossier de sortie")
@@ -169,14 +209,53 @@ class LightboxLettersDialog(QDialog):
 
     def _on_text_changed(self, _text: str) -> None:
         self._refresh_letters_list()
+        self._on_thickness_relevant_changed()
+
+    def _on_thickness_relevant_changed(self, *_args) -> None:
+        """Reutilise le meme garde-fou d'epaisseur de paroi que la
+        generation reelle (`letter_wall_thickness_ok`), applique a un test
+        rapide sur les lettres du mot courant (ou un echantillon par defaut
+        si le mot est vide) -- avertissement indicatif AVANT de lancer une
+        generation complete, aucune logique dupliquee."""
+        text = self.text_edit.text().strip() or "Il1"
+        if not self._font_path:
+            self.thickness_warning_label.setText("")
+            return
+        try:
+            layout, _face_params, _rows, _cols = compute_word_layout_and_grid(
+                text, self._font_path, self.font_size_spin.value()
+            )
+        except Exception:
+            self.thickness_warning_label.setText("")
+            return
+
+        wall_thickness_mm = self.wall_spin.value()
+        thin_letters = [
+            letter.character
+            for letter in layout.letters
+            if not letter_wall_thickness_ok(letter, wall_thickness_mm)
+        ]
+        if thin_letters:
+            self.thickness_warning_label.setText(
+                "Police trop fine pour l'epaisseur de paroi demandee (ex. "
+                f"'{thin_letters[0]}') -- choisissez une police plus grasse/epaisse, "
+                "augmentez la taille de corps, ou reduisez l'epaisseur des parois."
+            )
+        else:
+            self.thickness_warning_label.setText("")
 
     def _refresh_letters_list(self) -> None:
         text = self.text_edit.text()
-        # On garde les images deja assignees dont l'index reste valide pour
-        # ce nouveau texte (evite de perdre une selection sur une simple
-        # correction de frappe).
+        # On garde les images/transforms deja assignes dont l'index reste
+        # valide pour ce nouveau texte (evite de perdre une selection sur
+        # une simple correction de frappe).
         self._image_by_index = {
             index: path for index, path in self._image_by_index.items() if index < len(text)
+        }
+        self._transform_by_index = {
+            index: transform
+            for index, transform in self._transform_by_index.items()
+            if index < len(text)
         }
         self.letters_list.clear()
         for index, character in enumerate(text):
@@ -195,22 +274,69 @@ class LightboxLettersDialog(QDialog):
         label.setMinimumWidth(80)
         row_layout.addWidget(label)
 
-        image_label = QLabel(self._image_by_index.get(index, "(aucune image)"))
+        image_path = self._image_by_index.get(index)
+        status = Path(image_path).name if image_path else "(aucune image)"
+        image_label = QLabel(status)
         row_layout.addWidget(image_label, 1)
 
-        assign_button = QPushButton("Assigner une image...")
-        assign_button.clicked.connect(lambda: self._assign_letter_image(index, image_label))
-        row_layout.addWidget(assign_button)
+        image_button = QPushButton("Image...")
+        image_button.setToolTip(
+            "Choisir une image puis regler son cadrage sur la lettre "
+            "(glisser = deplacer, molette = zoomer)."
+        )
+        image_button.clicked.connect(lambda: self._assign_letter_image(index))
+        row_layout.addWidget(image_button)
 
         return row
 
-    def _assign_letter_image(self, index: int, image_label: QLabel) -> None:
+    def _assign_letter_image(self, index: int) -> None:
+        text = self.text_edit.text()
+        if index >= len(text):
+            return
+        if not self._font_path:
+            QMessageBox.warning(
+                self, "LightBox Letters", "Choisissez d'abord une police pour pouvoir cadrer l'image."
+            )
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Image de lithophanie", "", "Images (*.png *.jpg *.jpeg)"
         )
-        if path:
-            self._image_by_index[index] = path
-            image_label.setText(path)
+        if not path:
+            return
+
+        try:
+            shape_mask = rasterize_letter_shape_mask_for_index(
+                text, self._font_path, self.font_size_spin.value(), index
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "LightBox Letters", f"Impossible de calculer le contour de la lettre : {exc}"
+            )
+            return
+
+        try:
+            from lithoshape3d.core.image.io import load_image
+            from lithoshape3d.core.image.preprocessing import to_grayscale_array
+
+            source_array = to_grayscale_array(load_image(path))
+        except Exception as exc:
+            QMessageBox.warning(self, "LightBox Letters", f"Image illisible : {exc}")
+            return
+
+        # Enchaine directement sur le cadrage visuel -- pas de dialogue
+        # intermediaire "Assigner une image..." separe du reglage.
+        from lithoshape3d.ui.cadrage_dialog import CadrageDialog
+
+        initial_transform = self._transform_by_index.get(index, ImageTransform())
+        cadrage = CadrageDialog(source_array, shape_mask, initial_transform, self)
+        cadrage.setWindowTitle(f"Cadrer la photo -- lettre '{text[index]}'")
+        if cadrage.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._image_by_index[index] = path
+        self._transform_by_index[index] = cadrage.transform
+        self._refresh_letters_list()
 
     # ------------------------------------------------------------------ #
     # Generation
@@ -239,6 +365,7 @@ class LightboxLettersDialog(QDialog):
             depth_mm=self.depth_spin.value(),
             wall_thickness_mm=self.wall_spin.value(),
             images_by_index=dict(self._image_by_index),
+            transforms_by_index=dict(self._transform_by_index),
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)
