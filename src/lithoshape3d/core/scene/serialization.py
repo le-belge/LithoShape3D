@@ -164,6 +164,7 @@ def _backlight_insert_to_dict(params: BacklightInsertParams) -> dict[str, Any]:
         "white_skin_thickness_mm": params.white_skin_thickness_mm,
         "insert_thickness_mm": params.insert_thickness_mm,
         "xy_clearance_mm": params.xy_clearance_mm,
+        "chamfer_width_mm": params.chamfer_width_mm,
     }
 
 
@@ -173,6 +174,7 @@ def _backlight_insert_from_dict(data: dict[str, Any]) -> BacklightInsertParams:
         white_skin_thickness_mm=data.get("white_skin_thickness_mm", defaults.white_skin_thickness_mm),
         insert_thickness_mm=data.get("insert_thickness_mm", defaults.insert_thickness_mm),
         xy_clearance_mm=data.get("xy_clearance_mm", defaults.xy_clearance_mm),
+        chamfer_width_mm=data.get("chamfer_width_mm", defaults.chamfer_width_mm),
     )
 
 
