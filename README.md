@@ -23,7 +23,8 @@ caissons LightBox.
 - **Export** : STL et 3MF multi-objets/multi-matériaux.
 - **Windows** : build et smoke test headless vérifiés par GitHub Actions.
 - **LightBox Designer** : première brique core/CLI pour générer un caisson
-  de texte simple avec façade lithophanie séparée.
+  de texte simple ou de silhouette image/SVG, avec capot plat ou façade
+  lithophanie séparée.
 - **Backlight Insert** : prototype expérimental, conservé dans le code mais
   non considéré comme validé physiquement.
 
@@ -62,8 +63,8 @@ au sein d'une même scène composée de plusieurs zones.
 - `ui/` — application PySide6 (`MainWindow`, worker de génération, état,
   logging). Assemble `core` et `viewer`, ne réimplémente jamais leur logique.
 - `cli.py` — point d'entrée unique : `lithoshape3d` (sans argument) lance
-  l'application graphique. Les commandes `generate` et `lightbox-text`
-  restent utilisables en headless.
+  l'application graphique. Les commandes `generate`, `lightbox-text` et
+  `lightbox-shape` restent utilisables en CLI.
 - `tests/` — tests du `core`, du `viewer` et de l'`ui`.
 
 ## Installation développement
@@ -115,17 +116,50 @@ lithoshape3d lightbox-text photo.png sortie_lightbox \
   --resolution 2.5
 ```
 
-Elle écrit des STL séparés dans le dossier de sortie :
+Elle écrit par défaut deux STL dans le dossier de sortie :
 
-- `lightbox_body.stl` — corps creux du caisson ;
+- `lightbox_body.stl` — corps creux du caisson avec fond intégré ;
 - `lightbox_face.stl` — façade lithophanie ;
-- `lightbox_back_panel.stl` — fond séparé, désactivable avec
-  `--no-back-panel`.
+
+Le fond séparé n'est pas le flux produit retenu. Il reste disponible
+uniquement sur demande explicite avec `--separate-back-panel`, surtout pour
+des tests ou variantes futures.
 
 Cette brique réutilise le pipeline lithophanie fiable et le Shape Composer.
 Elle ne dépend pas du prototype Backlight Insert. Les textes complexes,
 lettres très fines et logos détaillés nécessitent encore des validations
 géométriques et physiques avant d'être considérés comme un flux produit.
+
+### LightBox depuis silhouette image ou SVG
+
+La commande `lightbox-shape` utilise directement une silhouette PNG/JPG/BMP
+ou un SVG comme forme du caisson. Par défaut, elle génère un caisson avec
+capot plat :
+
+```bash
+lithoshape3d lightbox-shape logo.svg sortie_lightbox \
+  --width 120 \
+  --height 80 \
+  --depth 30 \
+  --wall-thickness 3
+```
+
+Pour générer une façade lithophanie à la forme du SVG :
+
+```bash
+lithoshape3d lightbox-shape logo.svg sortie_lightbox \
+  --width 120 \
+  --height 80 \
+  --depth 30 \
+  --wall-thickness 3 \
+  --face lithophane \
+  --lithophane-image photo.png
+```
+
+Note : l'import SVG direct réutilise le rasteriseur QtSvg existant dans
+l'application. Il nécessite donc une installation avec l'extra UI/app
+(`pip install -e ".[app]"`). Sans QtSvg, il faut rasteriser le SVG en PNG
+avant d'utiliser la commande.
 
 ## Benchmark
 
@@ -240,7 +274,8 @@ rectangulaires (Shape Composer), les matériaux/couleurs et l'export 3MF
 multi-objets, et une stratégie couleur qui garantit qu'assigner un
 matériau ne modifie jamais la géométrie (Material Only) ainsi qu'un
 prototype expérimental d'insert rétro-éclairé indépendant (Backlight
-Insert), ainsi qu'une première brique LightBox texte + façade lithophanie.
+Insert), ainsi qu'une première brique LightBox texte/silhouette/SVG avec
+capot plat ou façade lithophanie.
 **Voir [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md)
 pour l'état réel, fonction par fonction, à jour à chaque version** — ce
 README n'est plus le document de référence pour l'état du produit.
