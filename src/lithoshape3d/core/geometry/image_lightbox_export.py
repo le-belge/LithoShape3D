@@ -12,6 +12,15 @@ cas le capot reutilise EXACTEMENT le meme pipeline heightfield/lithophanie
 que LightBox Letters (`lightbox.build_lightbox_lithophane_face_mesh`) --
 aucune logique de generation dupliquee ici, seulement de la glue.
 
+Deuxieme mode confirme par l'utilisateur (retour "Thunderdome" -- dessin au
+trait noir/blanc avec elements physiquement disjoints, ex. poings qui ne
+touchent pas un cercle) : `shape_mode="artwork_envelope"` -- corps/fond
+extrudes depuis l'ENVELOPPE unifiee (`artwork_shape_extractor.py`, un seul
+caisson meme si le dessin source a des zones disjointes), et
+`cap_mode="flat_two_color"` -- capot en DEUX pieces plates complementaires
+(encre/fond, pour une impression 2 couleurs) decoupees depuis le masque
+d'encre FIN (pas l'enveloppe fermee, qui perdrait le detail du trait).
+
 Factorise pour eviter toute duplication entre le CLI (`lightbox-image`) et
 l'ecran GUI (`ui/lightbox_image_dialog.py`) : les deux se contentent
 d'appeler `generate_lightbox_from_image` puis de formater le resultat --
@@ -23,6 +32,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lithoshape3d.core.scene.models import GeometryParameters, ImageTransform
+
+SHAPE_MODE_SILHOUETTE = "silhouette"
+SHAPE_MODE_ARTWORK_ENVELOPE = "artwork_envelope"
+_SHAPE_MODES = (SHAPE_MODE_SILHOUETTE, SHAPE_MODE_ARTWORK_ENVELOPE)
+
+CAP_MODE_FLAT = "flat"
+CAP_MODE_LITHOPHANE = "lithophane"
+CAP_MODE_FLAT_TWO_COLOR = "flat_two_color"
+_CAP_MODES = (CAP_MODE_FLAT, CAP_MODE_LITHOPHANE, CAP_MODE_FLAT_TWO_COLOR)
 
 DEFAULT_CAP_THICKNESS_MM = 1.5
 """Epaisseur du capot plat/lisse par defaut (mode sans lithophanie) : reste
@@ -116,26 +134,46 @@ def generate_lightbox_from_image(
     back_thickness_mm: float = 1.2,
     threshold_mode: str = "auto",
     threshold_value: int | None = None,
-    min_component_area_ratio: float = 0.001,
+    min_component_area_ratio: float | None = None,
     cap_thickness_mm: float = DEFAULT_CAP_THICKNESS_MM,
     cap_image_path: str | Path | None = None,
     cap_image_transform: ImageTransform | None = None,
     resolution: float | None = None,
     min_thickness_mm: float | None = None,
     max_thickness_mm: float | None = None,
+    shape_mode: str = SHAPE_MODE_SILHOUETTE,
+    cap_mode: str | None = None,
+    closing_radius_px: int | None = None,
+    max_closing_radius_px: int | None = None,
 ) -> LightboxImageResult:
     """Genere un caisson lumineux vectoriel depuis une image (corps + fond +
     capot + DXF). `image_path` doit deja etre un raster PNG/JPG (la
     conversion SVG -> PNG, via Qt, est la responsabilite de l'appelant --
     voir `ui/shape_svg_import.py` -- `core/` ne depend jamais de Qt).
 
-    Capot : PLAT/LISSE par defaut (`cap_image_path=None`, extrusion
-    vectorielle directe du footprint d'epaulement) ; lithophanie si
-    `cap_image_path` est fourni (meme moteur heightfield que
-    `lightbox-letters`)."""
+    `shape_mode` :
+      - `"silhouette"` (par defaut, inchange) : contour = silhouette
+        extraite par `image_shape_extractor.extract_shape_from_image`
+        (Cas A alpha ou Cas B seuillage photo).
+      - `"artwork_envelope"` : contour = enveloppe unifiee d'un dessin au
+        trait (`artwork_shape_extractor.extract_artwork_from_image`) -- un
+        seul caisson meme si le dessin source a des elements disjoints
+        (ex. poings qui ne touchent pas un cercle).
+
+    `cap_mode` (`None` = comportement historique : lithophanie si
+    `cap_image_path` fourni, sinon plat) :
+      - `"flat"` : capot plat/lisse (extrusion directe du footprint).
+      - `"lithophane"` : capot heightfield depuis `cap_image_path` (meme
+        moteur que `lightbox-letters`).
+      - `"flat_two_color"` : DEUX capots plats complementaires (encre/fond)
+        decoupes depuis le masque d'encre fin -- necessite
+        `shape_mode="artwork_envelope"` (le masque d'encre n'existe que
+        dans ce mode)."""
     from dataclasses import fields
 
     import trimesh
+    from shapely.geometry import GeometryCollection
+    from shapely.ops import unary_union
 
     from lithoshape3d.core.export.stl_export import export_stl
     from lithoshape3d.core.geometry.heightmap import grid_dimensions
@@ -159,24 +197,75 @@ def generate_lightbox_from_image(
         raise ValueError(
             "Toutes les dimensions (largeur, profondeur, parois, fond) doivent etre > 0."
         )
+    if shape_mode not in _SHAPE_MODES:
+        raise ValueError(f"shape_mode invalide : {shape_mode!r} (attendu {_SHAPE_MODES}).")
 
-    try:
-        shape = extract_shape_from_image(
-            image_path,
-            width_mm,
-            threshold_mode=threshold_mode,
-            threshold_value=threshold_value,
-            min_component_area_ratio=min_component_area_ratio,
+    effective_cap_mode = cap_mode if cap_mode is not None else (
+        CAP_MODE_LITHOPHANE if cap_image_path else CAP_MODE_FLAT
+    )
+    if effective_cap_mode not in _CAP_MODES:
+        raise ValueError(f"cap_mode invalide : {effective_cap_mode!r} (attendu {_CAP_MODES}).")
+    if effective_cap_mode == CAP_MODE_FLAT_TWO_COLOR:
+        if shape_mode != SHAPE_MODE_ARTWORK_ENVELOPE:
+            raise ValueError(
+                "cap_mode='flat_two_color' necessite shape_mode='artwork_envelope' (le masque "
+                "d'encre necessaire au capot 2 couleurs n'existe que dans ce mode)."
+            )
+        if cap_image_path:
+            raise ValueError(
+                "cap_mode='flat_two_color' ne prend pas d'image de capot separee (cap_image_path) "
+                "-- les deux couleurs sont decoupees depuis l'encre du dessin source lui-meme."
+            )
+
+    ink_polygon = None
+    if shape_mode == SHAPE_MODE_SILHOUETTE:
+        try:
+            silhouette_kwargs = {}
+            if min_component_area_ratio is not None:
+                silhouette_kwargs["min_component_area_ratio"] = min_component_area_ratio
+            shape = extract_shape_from_image(
+                image_path,
+                width_mm,
+                threshold_mode=threshold_mode,
+                threshold_value=threshold_value,
+                **silhouette_kwargs,
+            )
+        except (ImageShapeExtractionError, ValueError, OSError) as exc:
+            result.messages.append(("error", f"extraction de la silhouette : {exc}"))
+            return result
+        result.threshold_used = shape.threshold_used
+        for warning in shape.warnings:
+            result.messages.append(("warning", warning))
+        outer = shape.polygon
+        shape_width_mm, shape_height_mm = shape.width_mm, shape.height_mm
+    else:
+        from lithoshape3d.core.geometry.artwork_shape_extractor import (
+            ArtworkExtractionError,
+            extract_artwork_from_image,
         )
-    except (ImageShapeExtractionError, ValueError, OSError) as exc:
-        result.messages.append(("error", f"extraction de la silhouette : {exc}"))
-        return result
 
-    result.threshold_used = shape.threshold_used
-    for warning in shape.warnings:
-        result.messages.append(("warning", warning))
-
-    outer = shape.polygon
+        try:
+            artwork_kwargs = {}
+            if min_component_area_ratio is not None:
+                artwork_kwargs["min_component_area_ratio"] = min_component_area_ratio
+            artwork = extract_artwork_from_image(
+                image_path,
+                width_mm,
+                threshold_mode=threshold_mode,
+                threshold_value=threshold_value,
+                closing_radius_px=closing_radius_px,
+                max_closing_radius_px=max_closing_radius_px,
+                **artwork_kwargs,
+            )
+        except (ArtworkExtractionError, ValueError, OSError) as exc:
+            result.messages.append(("error", f"extraction de l'enveloppe artwork : {exc}"))
+            return result
+        result.threshold_used = artwork.threshold_used
+        for warning in artwork.warnings:
+            result.messages.append(("warning", warning))
+        outer = artwork.envelope_polygon
+        ink_polygon = artwork.ink_polygon
+        shape_width_mm, shape_height_mm = artwork.width_mm, artwork.height_mm
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -219,7 +308,8 @@ def generate_lightbox_from_image(
                 ("error", f"validation fond : {', '.join(back_validation.issues())}")
             )
 
-    # Capot : plat/lisse par defaut, ou lithophanie si une image est fournie.
+    # Capot : plat/lisse par defaut, lithophanie si une image est fournie,
+    # ou deux pieces plates complementaires (encre/fond) en mode 2 couleurs.
     cap_polygon = vector_lightbox_cap_footprint(outer, wall_thickness_mm)
     cap_depth_mm = depth_mm - SHOULDER_DEPTH_MM
     if cap_polygon.is_empty or cap_polygon.area <= 0:
@@ -230,11 +320,11 @@ def generate_lightbox_from_image(
                 "parametres d'epaisseur de paroi).",
             )
         )
-    elif cap_image_path:
+    elif effective_cap_mode == CAP_MODE_LITHOPHANE:
         gp_defaults = {f.name: f.default for f in fields(GeometryParameters)}
         face_params = GeometryParameters(
-            width_mm=shape.width_mm,
-            height_mm=shape.height_mm,
+            width_mm=shape_width_mm,
+            height_mm=shape_height_mm,
             min_thickness_mm=(
                 min_thickness_mm if min_thickness_mm is not None else gp_defaults["min_thickness_mm"]
             ),
@@ -244,7 +334,9 @@ def generate_lightbox_from_image(
             resolution=resolution if resolution is not None else gp_defaults["resolution"],
         )
         rows, cols = grid_dimensions(face_params)
-        cap_shape_mask = rasterize_polygon_mask(cap_polygon, shape.width_mm, shape.height_mm, rows, cols)
+        cap_shape_mask = rasterize_polygon_mask(
+            cap_polygon, shape_width_mm, shape_height_mm, rows, cols
+        )
         if cap_shape_mask.any():
             face_mesh = build_lightbox_lithophane_face_mesh(
                 cap_image_path, cap_shape_mask, face_params, cap_depth_mm, cap_image_transform
@@ -260,6 +352,48 @@ def generate_lightbox_from_image(
                 )
         else:
             result.messages.append(("warning", "capot ignore (footprint vide a cette resolution)."))
+    elif effective_cap_mode == CAP_MODE_FLAT_TWO_COLOR:
+        if ink_polygon is None or ink_polygon.is_empty or ink_polygon.area <= 0:
+            result.messages.append(
+                ("warning", "capot 2 couleurs ignore (aucune encre detectee dans le dessin).")
+            )
+        else:
+            # Decoupe exacte du footprint du capot en deux pieces complementaires
+            # (encre / fond) via booleenne shapely -- garantit par construction
+            # une union == footprint et une intersection vide entre les deux.
+            color_a_polygon = ink_polygon.intersection(cap_polygon)
+            color_b_polygon = cap_polygon.difference(ink_polygon)
+            any_piece_written = False
+            for label, piece_polygon in (("a", color_a_polygon), ("b", color_b_polygon)):
+                if isinstance(piece_polygon, GeometryCollection):
+                    polys = [g for g in piece_polygon.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                    piece_polygon = unary_union(polys) if polys else None
+                if piece_polygon is None or piece_polygon.is_empty or piece_polygon.area <= 0:
+                    result.messages.append(
+                        ("warning", f"capot couleur {label} ignore (aire nulle a cette resolution).")
+                    )
+                    continue
+                piece_mesh = build_vector_lightbox_back_panel_mesh(piece_polygon, cap_thickness_mm)
+                piece_mesh = piece_mesh.copy()
+                piece_mesh.apply_translation((0.0, 0.0, cap_depth_mm))
+                piece_validation = validate_mesh(piece_mesh)
+                if piece_validation.is_valid:
+                    piece_path = output_dir / f"{slug}_capot_couleur_{label}.stl"
+                    export_stl(piece_mesh, piece_path)
+                    result.written.append(piece_path)
+                    any_piece_written = True
+                else:
+                    result.messages.append(
+                        (
+                            "error",
+                            f"validation capot couleur {label} : "
+                            f"{', '.join(piece_validation.issues())}",
+                        )
+                    )
+            if not any_piece_written:
+                result.messages.append(
+                    ("error", "capot 2 couleurs : aucune des deux pieces n'a pu etre generee.")
+                )
     else:
         cap_mesh = build_vector_lightbox_back_panel_mesh(cap_polygon, cap_thickness_mm)
         cap_mesh = cap_mesh.copy()

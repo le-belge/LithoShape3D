@@ -50,6 +50,17 @@ logger = logging.getLogger("lithoshape3d.ui.lightbox_image")
 _PREVIEW_MAX_SIDE = 360
 _CAP_MODE_FLAT = "flat"
 _CAP_MODE_LITHOPHANE = "lithophane"
+_CAP_MODE_FLAT_TWO_COLOR = "flat_two_color"
+_SHAPE_MODE_SILHOUETTE = "silhouette"
+_SHAPE_MODE_ARTWORK = "artwork_envelope"
+
+_ARTWORK_PREVIEW_BACKGROUND = (40, 40, 40)
+"""Hors enveloppe (exterieur reel du futur caisson)."""
+_ARTWORK_PREVIEW_FOND = (225, 225, 225)
+"""Dans l'enveloppe mais pas encre -- deviendra la piece "fond" du capot 2
+couleurs (ex. interieur d'un cercle ferme, entre les doigts)."""
+_ARTWORK_PREVIEW_INK = (15, 15, 15)
+"""Encre -- deviendra la piece "encre" du capot 2 couleurs."""
 
 
 class _ImageLightboxSignals(QObject):
@@ -125,15 +136,31 @@ class LightboxImageDialog(QDialog):
 
         content_row = QHBoxLayout()
 
+        preview_col = QVBoxLayout()
         self.preview_label = QLabel("Choisissez une image pour voir la silhouette extraite.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(_PREVIEW_MAX_SIDE, _PREVIEW_MAX_SIDE)
         self.preview_label.setStyleSheet("background-color: #202020; color: #ccc;")
         self.preview_label.setWordWrap(True)
-        content_row.addWidget(self.preview_label, 1)
+        preview_col.addWidget(self.preview_label, 1)
+
+        self.artwork_info_label = QLabel("")
+        self.artwork_info_label.setWordWrap(True)
+        self.artwork_info_label.setVisible(False)
+        preview_col.addWidget(self.artwork_info_label)
+
+        content_row.addLayout(preview_col, 1)
 
         form_widget = QWidget()
         form = QFormLayout(form_widget)
+
+        self.shape_mode_combo = QComboBox()
+        self.shape_mode_combo.addItem("Silhouette (logo/photo)", _SHAPE_MODE_SILHOUETTE)
+        self.shape_mode_combo.addItem(
+            "Enveloppe dessin au trait (elements disjoints unifies)", _SHAPE_MODE_ARTWORK
+        )
+        self.shape_mode_combo.currentIndexChanged.connect(self._on_shape_mode_changed)
+        form.addRow("Mode de forme", self.shape_mode_combo)
 
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(5.0, 1000.0)
@@ -179,6 +206,10 @@ class LightboxImageDialog(QDialog):
         self.cap_mode_combo = QComboBox()
         self.cap_mode_combo.addItem("Plat / lisse (par defaut, sans litho)", _CAP_MODE_FLAT)
         self.cap_mode_combo.addItem("Lithophanie (image separee)", _CAP_MODE_LITHOPHANE)
+        self.cap_mode_combo.addItem(
+            "2 couleurs plates (dessin au trait -- necessite mode enveloppe)",
+            _CAP_MODE_FLAT_TWO_COLOR,
+        )
         self.cap_mode_combo.currentIndexChanged.connect(self._on_cap_mode_changed)
         form.addRow("Capot", self.cap_mode_combo)
 
@@ -266,20 +297,33 @@ class LightboxImageDialog(QDialog):
         self._gray = gray
         self.image_label.setText(Path(path).name)
 
-        if alpha is not None:
-            self.threshold_row_widget.setVisible(False)
-        else:
-            self.threshold_row_widget.setVisible(True)
-            try:
-                _mask, otsu_value, _warnings = threshold_and_clean_mask(gray, mode="auto")
-            except Exception:
-                otsu_value = 128
-            self.threshold_slider.blockSignals(True)
-            self.threshold_slider.setValue(otsu_value)
-            self.threshold_slider.blockSignals(False)
-            self.threshold_value_label.setText(str(otsu_value))
+        try:
+            _mask, otsu_value, _warnings = threshold_and_clean_mask(gray, mode="auto")
+        except Exception:
+            otsu_value = 128
+        self.threshold_slider.blockSignals(True)
+        self.threshold_slider.setValue(otsu_value)
+        self.threshold_slider.blockSignals(False)
+        self.threshold_value_label.setText(str(otsu_value))
+        self.threshold_row_widget.setVisible(self._threshold_relevant())
 
         self._refresh_preview()
+
+    def _threshold_relevant(self) -> bool:
+        """Le mode enveloppe dessin au trait travaille TOUJOURS sur les
+        niveaux de gris (l'alpha eventuel est ignore, voir
+        `artwork_shape_extractor.extract_artwork_from_image`) -- le slider
+        de seuil reste donc pertinent meme pour un PNG avec canal alpha,
+        contrairement au mode silhouette (Cas A alpha exploitable = pas de
+        seuillage)."""
+        if self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK:
+            return True
+        return self._alpha is None
+
+    def _resolve_threshold_args(self) -> tuple[str, int | None]:
+        if self._threshold_relevant():
+            return "manual", self.threshold_slider.value()
+        return "auto", None
 
     def _choose_output_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Dossier de sortie")
@@ -288,8 +332,31 @@ class LightboxImageDialog(QDialog):
             self.output_label.setText(directory)
 
     def _on_cap_mode_changed(self, _index: int) -> None:
-        is_lithophane = self.cap_mode_combo.currentData() == _CAP_MODE_LITHOPHANE
-        self.cap_image_button.setEnabled(is_lithophane)
+        cap_mode = self.cap_mode_combo.currentData()
+        if cap_mode == _CAP_MODE_FLAT_TWO_COLOR and self.shape_mode_combo.currentData() != _SHAPE_MODE_ARTWORK:
+            QMessageBox.warning(
+                self,
+                "LightBox depuis image",
+                "Le capot 2 couleurs necessite le mode de forme "
+                "'Enveloppe dessin au trait'.",
+            )
+            self.cap_mode_combo.blockSignals(True)
+            self.cap_mode_combo.setCurrentIndex(self.cap_mode_combo.findData(_CAP_MODE_FLAT))
+            self.cap_mode_combo.blockSignals(False)
+            cap_mode = _CAP_MODE_FLAT
+        self.cap_image_button.setEnabled(cap_mode == _CAP_MODE_LITHOPHANE)
+
+    def _on_shape_mode_changed(self, _index: int) -> None:
+        is_artwork = self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK
+        self.artwork_info_label.setVisible(is_artwork)
+        if self._gray is not None:
+            self.threshold_row_widget.setVisible(self._threshold_relevant())
+        if not is_artwork and self.cap_mode_combo.currentData() == _CAP_MODE_FLAT_TWO_COLOR:
+            self.cap_mode_combo.blockSignals(True)
+            self.cap_mode_combo.setCurrentIndex(self.cap_mode_combo.findData(_CAP_MODE_FLAT))
+            self.cap_mode_combo.blockSignals(False)
+            self.cap_image_button.setEnabled(False)
+        self._refresh_preview()
 
     def _choose_cap_image(self) -> None:
         if not self._resolved_image_path:
@@ -367,6 +434,10 @@ class LightboxImageDialog(QDialog):
         if self._gray is None:
             return
 
+        if self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK:
+            self._refresh_artwork_preview()
+            return
+
         from lithoshape3d.core.geometry.image_shape_extractor import (
             ImageShapeExtractionError,
             extract_shape_from_arrays,
@@ -394,10 +465,75 @@ class LightboxImageDialog(QDialog):
 
         self._update_preview_pixmap(result.mask)
 
+    def _refresh_artwork_preview(self) -> None:
+        from lithoshape3d.core.geometry.artwork_shape_extractor import (
+            ArtworkExtractionError,
+            extract_artwork_from_arrays,
+        )
+
+        threshold_mode, threshold_value = self._resolve_threshold_args()
+
+        try:
+            result = extract_artwork_from_arrays(
+                self._gray,
+                self.width_spin.value(),
+                threshold_mode=threshold_mode,
+                threshold_value=threshold_value,
+            )
+        except ArtworkExtractionError as exc:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText(f"Enveloppe introuvable : {exc}")
+            self.artwork_info_label.setText("")
+            return
+        except Exception as exc:  # pragma: no cover - defensif, UI seulement
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText(f"Erreur d'apercu : {exc}")
+            self.artwork_info_label.setText("")
+            return
+
+        self._update_preview_pixmap_rgb(self._artwork_preview_rgb(result.ink_mask, result.envelope_mask))
+
+        info = f"{result.num_components_before_closing} composante(s) d'encre detectee(s)."
+        if result.closing_radius_px:
+            info += (
+                f" Fermeture automatique (rayon {result.closing_radius_px}px) -> "
+                "1 caisson unique."
+            )
+        else:
+            info += " Deja unifiees : aucune fermeture necessaire."
+        self.artwork_info_label.setText(info)
+
+    @staticmethod
+    def _artwork_preview_rgb(ink_mask: np.ndarray, envelope_mask: np.ndarray) -> np.ndarray:
+        """Composite visuel : fond sombre = exterieur du futur caisson, gris
+        clair = enveloppe/matiere (deviendra la piece "fond" du capot 2
+        couleurs), noir = encre (deviendra la piece "encre") -- pour que
+        l'utilisateur comprenne les DEUX masques generes avant de cliquer
+        "Generer", comme demande."""
+        rows, cols = envelope_mask.shape
+        rgb = np.empty((rows, cols, 3), dtype=np.uint8)
+        rgb[:, :] = _ARTWORK_PREVIEW_BACKGROUND
+        rgb[envelope_mask] = _ARTWORK_PREVIEW_FOND
+        rgb[ink_mask] = _ARTWORK_PREVIEW_INK
+        return rgb
+
     def _update_preview_pixmap(self, mask: np.ndarray) -> None:
         rows, cols = mask.shape
         array_u8 = np.ascontiguousarray((mask.astype(np.uint8)) * 255)
         image = QImage(array_u8.data, cols, rows, cols, QImage.Format.Format_Grayscale8)
+        pixmap = QPixmap.fromImage(image.copy()).scaled(
+            _PREVIEW_MAX_SIDE,
+            _PREVIEW_MAX_SIDE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.preview_label.setText("")
+        self.preview_label.setPixmap(pixmap)
+
+    def _update_preview_pixmap_rgb(self, rgb: np.ndarray) -> None:
+        rows, cols, _channels = rgb.shape
+        array_u8 = np.ascontiguousarray(rgb)
+        image = QImage(array_u8.data, cols, rows, cols * 3, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(image.copy()).scaled(
             _PREVIEW_MAX_SIDE,
             _PREVIEW_MAX_SIDE,
@@ -429,8 +565,8 @@ class LightboxImageDialog(QDialog):
             )
             return
 
-        threshold_mode = "auto" if self._alpha is not None else "manual"
-        threshold_value = None if self._alpha is not None else self.threshold_slider.value()
+        threshold_mode, threshold_value = self._resolve_threshold_args()
+        shape_mode = self.shape_mode_combo.currentData()
 
         self.generate_button.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -447,6 +583,8 @@ class LightboxImageDialog(QDialog):
             threshold_value=threshold_value,
             cap_image_path=cap_image_path,
             cap_image_transform=cap_transform,
+            shape_mode=shape_mode,
+            cap_mode=cap_mode,
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import trimesh
 from PIL import Image, ImageDraw
 
@@ -117,6 +118,70 @@ def test_generate_lightbox_from_image_reports_clean_error_on_degenerate_image(tm
     assert not result.ok
     assert result.errors
     assert any("extraction" in e for e in result.errors)
+
+
+def _save_artwork_with_disjoint_parts(tmp_path, name: str = "artwork.png"):
+    """Dessin au trait : un cercle + deux blobs disjoints (poings) -- meme
+    esprit que le cas reel Thunderdome (elements physiquement disjoints du
+    cercle central dans le dessin source)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    image = Image.new("L", (300, 300), 255)
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([90, 90, 210, 210], outline=0, width=10)
+    draw.ellipse([20, 100, 70, 150], fill=0)
+    draw.ellipse([230, 100, 280, 150], fill=0)
+    path = tmp_path / name
+    image.save(path)
+    return path
+
+
+def test_generate_lightbox_artwork_envelope_unifies_disjoint_parts_into_one_body(tmp_path):
+    image_path = _save_artwork_with_disjoint_parts(tmp_path / "src")
+    output_dir = tmp_path / "out_artwork"
+
+    result = generate_lightbox_from_image(
+        image_path,
+        output_dir,
+        width_mm=80.0,
+        depth_mm=20.0,
+        wall_thickness_mm=1.6,
+        back_thickness_mm=1.2,
+        shape_mode="artwork_envelope",
+        cap_mode="flat_two_color",
+    )
+
+    assert not result.errors, result.errors
+    corps = [p for p in result.written if p.name.endswith("_corps.stl")]
+    fond = [p for p in result.written if p.name.endswith("_fond.stl")]
+    capot_a = [p for p in result.written if p.name.endswith("_capot_couleur_a.stl")]
+    capot_b = [p for p in result.written if p.name.endswith("_capot_couleur_b.stl")]
+    assert len(corps) == 1
+    assert len(fond) == 1
+    assert len(capot_a) == 1
+    assert len(capot_b) == 1
+
+    for path in corps + fond + capot_a + capot_b:
+        mesh = trimesh.load(path)
+        assert mesh.is_watertight, f"{path} n'est pas watertight"
+
+    # Le corps doit rester UNE seule enveloppe connectee malgre les 2
+    # blobs disjoints du dessin source -- c'est tout l'interet du mode
+    # artwork_envelope (fermeture morphologique automatique).
+    body_mesh = trimesh.load(corps[0])
+    assert len(body_mesh.split(only_watertight=False)) == 1
+    assert any("fermeture" in w for w in result.warnings)
+
+
+def test_generate_lightbox_flat_two_color_requires_artwork_envelope_shape_mode(tmp_path):
+    image_path = _save_photo_like(tmp_path / "src")
+
+    with pytest.raises(ValueError, match="artwork_envelope"):
+        generate_lightbox_from_image(
+            image_path,
+            tmp_path / "out",
+            width_mm=60.0,
+            cap_mode="flat_two_color",
+        )
 
 
 def test_generate_lightbox_from_image_with_lithophane_cap_reuses_heightfield_engine(tmp_path):

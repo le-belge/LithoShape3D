@@ -106,8 +106,12 @@ def _build_parser() -> argparse.ArgumentParser:
     image_box.add_argument(
         "--min-component-area-ratio",
         type=float,
-        default=0.001,
-        help="Aire minimale (fraction de l'aire totale) pour qu'une composante ne soit pas consideree comme du bruit.",
+        default=None,
+        help=(
+            "Aire minimale (fraction de l'aire totale) pour qu'une composante ne soit pas "
+            "consideree comme du bruit. Omis : 0.1%% en mode silhouette, 0.02%% en mode "
+            "artwork-envelope (garde le detail fin du trait)."
+        ),
     )
     image_box.add_argument(
         "--cap-thickness-mm",
@@ -125,6 +129,42 @@ def _build_parser() -> argparse.ArgumentParser:
     image_box.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
     image_box.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
     image_box.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
+    image_box.add_argument(
+        "--shape-mode",
+        default="silhouette",
+        choices=["silhouette", "artwork-envelope"],
+        help=(
+            "'silhouette' (par defaut) : contour = silhouette extraite (logo alpha ou photo "
+            "seuillee). 'artwork-envelope' : contour = enveloppe unifiee d'un dessin au trait "
+            "(un seul caisson meme si le dessin a des elements disjoints, ex. Thunderdome)."
+        ),
+    )
+    image_box.add_argument(
+        "--cap-mode",
+        default=None,
+        choices=["flat", "lithophane", "flat-two-color"],
+        help=(
+            "Mode du capot. Omis : lithophanie si --cap-image fourni, sinon plat. "
+            "'flat-two-color' : deux capots plats complementaires (encre/fond) decoupes depuis "
+            "l'encre du dessin -- necessite --shape-mode artwork-envelope."
+        ),
+    )
+    image_box.add_argument(
+        "--closing-radius-px",
+        type=int,
+        default=None,
+        help=(
+            "Rayon (px, masque de travail) de la fermeture morphologique unifiant les "
+            "composantes d'encre disjointes en mode artwork-envelope. Omis : recherche "
+            "automatique du plus petit rayon suffisant."
+        ),
+    )
+    image_box.add_argument(
+        "--max-closing-radius-px",
+        type=int,
+        default=None,
+        help="Plafond de la recherche automatique de rayon de fermeture (mode artwork-envelope).",
+    )
 
     return parser
 
@@ -328,6 +368,9 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
 
     cap_transform = _parse_transform(args.cap_transform) if args.cap_transform else None
 
+    shape_mode = args.shape_mode.replace("-", "_")
+    cap_mode = args.cap_mode.replace("-", "_") if args.cap_mode else None
+
     kwargs = {
         "width_mm": args.width_mm,
         "depth_mm": args.depth_mm,
@@ -341,13 +384,21 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
         "resolution": args.resolution,
         "min_thickness_mm": args.min_thickness,
         "max_thickness_mm": args.max_thickness,
+        "shape_mode": shape_mode,
+        "cap_mode": cap_mode,
+        "closing_radius_px": args.closing_radius_px,
+        "max_closing_radius_px": args.max_closing_radius_px,
     }
     if args.cap_thickness_mm is not None:
         kwargs["cap_thickness_mm"] = args.cap_thickness_mm
     else:
         kwargs["cap_thickness_mm"] = DEFAULT_CAP_THICKNESS_MM
 
-    result = generate_lightbox_from_image(image_path, args.output_dir, **kwargs)
+    try:
+        result = generate_lightbox_from_image(image_path, args.output_dir, **kwargs)
+    except ValueError as exc:
+        print(f"ECHEC: {exc}")
+        return 1
 
     for level, text in result.messages:
         prefix = "ECHEC" if level == "error" else "AVERTISSEMENT"
