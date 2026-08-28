@@ -222,143 +222,36 @@ def _parse_transform(raw: str):
 
 
 def _cmd_lightbox_letters(args: argparse.Namespace) -> int:
-    from lithoshape3d.core.export.stl_export import export_stl
-    from lithoshape3d.core.geometry.lightbox import (
-        LightBoxFaceMode,
-        LightBoxParameters,
-        build_lightbox_from_shape_mask,
-    )
-    from lithoshape3d.core.geometry.letter_glyph_extractor import (
-        extract_word_glyphs,
-        rasterize_letter_mask,
-    )
-    from lithoshape3d.core.validation.mesh_checks import validate_mesh
-    import trimesh
-
-    layout = extract_word_glyphs(args.text, args.font, font_size_mm=args.font_size)
-    for warning in layout.warnings:
-        print(f"AVERTISSEMENT: {warning}")
+    from lithoshape3d.core.geometry.lightbox_letters_export import generate_lightbox_letters
 
     images_by_index = _parse_indexed_kv(args.image_letter)
     transforms_raw = _parse_indexed_kv(args.transform_letter)
     transforms_by_index = {idx: _parse_transform(raw) for idx, raw in transforms_raw.items()}
 
-    face_params = GeometryParameters(
-        width_mm=layout.width_mm,
-        height_mm=layout.height_mm,
+    result = generate_lightbox_letters(
+        args.text,
+        args.font,
+        args.output_dir,
+        font_size_mm=args.font_size,
+        resolution=args.resolution,
+        depth_mm=args.depth,
+        wall_thickness_mm=args.wall_thickness,
+        back_thickness_mm=args.back_thickness,
         min_thickness_mm=args.min_thickness,
         max_thickness_mm=args.max_thickness,
-        resolution=args.resolution,
-    )
-    box_params_lithophane = LightBoxParameters(
-        depth_mm=args.depth,
-        wall_thickness_mm=args.wall_thickness,
-        back_panel_thickness_mm=args.back_thickness,
-        face_mode=LightBoxFaceMode.LITHOPHANE,
-    )
-    box_params_solid = LightBoxParameters(
-        depth_mm=args.depth,
-        wall_thickness_mm=args.wall_thickness,
-        back_panel_thickness_mm=args.back_thickness,
-        face_mode=LightBoxFaceMode.SOLID,
+        images_by_index=images_by_index,
+        transforms_by_index=transforms_by_index,
     )
 
-    from lithoshape3d.core.geometry.heightmap import grid_dimensions
+    for level, text in result.messages:
+        prefix = "ECHEC" if level == "error" else "AVERTISSEMENT"
+        print(f"{prefix}: {text}")
 
-    rows, cols = grid_dimensions(face_params)
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    written: list[Path] = []
-    slug = "".join(c if c.isalnum() else "_" for c in args.text).lower() or "mot"
-
-    for letter in layout.letters:
-        for w in letter.warnings:
-            print(f"AVERTISSEMENT lettre '{letter.character}' (#{letter.index}): {w}")
-
-        min_wall = args.wall_thickness
-        # La composante la plus fine (ex. la barre du "i") est le vrai
-        # facteur limitant, pas la bbox globale du glyphe (qui peut inclure
-        # plusieurs composantes disjointes largement espacees).
-        narrowest_part = min(
-            (max(p[0] for p in part.exterior) - min(p[0] for p in part.exterior))
-            for part in letter.parts
-        )
-        if narrowest_part < min_wall * 2:
-            print(
-                f"AVERTISSEMENT: lettre '{letter.character}' (#{letter.index}) trop fine "
-                f"({narrowest_part:.2f} mm) pour l'epaisseur de paroi demandee "
-                f"({min_wall} mm) -- caisson ignore pour cette lettre."
-            )
-            continue
-
-        shape_mask = rasterize_letter_mask(letter, layout.width_mm, layout.height_mm, rows, cols)
-
-        image_path = images_by_index.get(letter.index)
-        image_transform = transforms_by_index.get(letter.index)
-        box_params = box_params_lithophane if image_path else box_params_solid
-
-        prefix = f"{slug}_lettre_{letter.index}_{letter.character.lower()}"
-        try:
-            result = build_lightbox_from_shape_mask(
-                shape_mask,
-                face_params,
-                box_params,
-                image_path=image_path,
-                image_transform=image_transform,
-            )
-        except ValueError as exc:
-            print(f"ECHEC lettre '{letter.character}' (#{letter.index}) : {exc}")
-            continue
-
-        for warning in result.warnings:
-            print(f"AVERTISSEMENT lettre '{letter.character}': {warning}")
-
-        body_validation = validate_mesh(result.body_mesh)
-        if not body_validation.is_valid:
-            print(
-                f"ECHEC validation corps lettre '{letter.character}' : "
-                f"{', '.join(body_validation.issues())}"
-            )
-            continue
-        body_path = output_dir / f"{prefix}_corps.stl"
-        export_stl(result.body_mesh, body_path)
-        written.append(body_path)
-
-        if result.face_mesh is not None:
-            face_validation = validate_mesh(result.face_mesh)
-            if face_validation.is_valid:
-                face_path = output_dir / f"{prefix}_capot.stl"
-                export_stl(result.face_mesh, face_path)
-                written.append(face_path)
-            else:
-                print(
-                    f"ECHEC validation capot lettre '{letter.character}' : "
-                    f"{', '.join(face_validation.issues())}"
-                )
-
-        # Export DXF decoupe (contour de la lettre) et base/LED (meme
-        # contour, reserve a un futur offset de clairance) -- reutilise
-        # directement le contour deja extrait, en unites mm absolues.
-        try:
-            polygon = letter.to_shapely()
-            path2d = trimesh.load_path(polygon)
-            decoupe_path = output_dir / f"{prefix}_decoupe.dxf"
-            path2d.export(str(decoupe_path))
-            written.append(decoupe_path)
-
-            base_led_path = output_dir / f"{prefix}_base_led.dxf"
-            path2d.export(str(base_led_path))
-            written.append(base_led_path)
-        except Exception as exc:  # pragma: no cover - export best-effort
-            print(f"AVERTISSEMENT: export DXF impossible pour '{letter.character}' : {exc}")
-
-    if not written:
+    if not result.ok:
         print("ECHEC: aucune lettre n'a pu etre generee.")
         return 1
 
-    print("OK:", ", ".join(str(path) for path in written))
+    print("OK:", ", ".join(str(path) for path in result.written))
     return 0
 
 

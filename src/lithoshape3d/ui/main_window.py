@@ -805,6 +805,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Isometrique", lambda: self.scene_viewer.view_isometric())
         view_menu.addAction("Reset camera", lambda: self.scene_viewer.reset_camera())
 
+        tools_menu = self.menuBar().addMenu("Outils")
+        lightbox_letters_action = QAction("LightBox Letters...", self)
+        lightbox_letters_action.triggered.connect(self._open_lightbox_letters_dialog)
+        tools_menu.addAction(lightbox_letters_action)
+
         help_menu = self.menuBar().addMenu("Aide")
         about_action = QAction("A propos", self)
         about_action.triggered.connect(self._show_about)
@@ -1859,6 +1864,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Divers
     # ------------------------------------------------------------------ #
+    def _open_lightbox_letters_dialog(self) -> None:
+        from lithoshape3d.ui.lightbox_letters_dialog import LightboxLettersDialog
+
+        dialog = LightboxLettersDialog(self)
+        dialog.exec()
+
     def _show_about(self) -> None:
         from lithoshape3d import __version__
 
