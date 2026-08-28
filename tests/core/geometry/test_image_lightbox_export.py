@@ -55,10 +55,10 @@ def test_generate_lightbox_from_image_alpha_logo_produces_watertight_pieces(tmp_
     fond = [p for p in result.written if p.name.endswith("_fond.stl")]
     capot = [p for p in result.written if p.name.endswith("_capot.stl")]
     assert len(corps) == 1
-    assert len(fond) == 1
+    assert fond == []  # fond fusionne dans le corps, pas de fichier separe
     assert len(capot) == 1
 
-    for path in corps + fond + capot:
+    for path in corps + capot:
         mesh = trimesh.load(path)
         assert mesh.is_watertight, f"{path} n'est pas watertight"
 
@@ -82,8 +82,8 @@ def test_generate_lightbox_from_image_photo_threshold_produces_watertight_pieces
     corps = [p for p in result.written if p.name.endswith("_corps.stl")]
     fond = [p for p in result.written if p.name.endswith("_fond.stl")]
     assert len(corps) == 1
-    assert len(fond) == 1
-    for path in corps + fond:
+    assert fond == []  # fond fusionne dans le corps, pas de fichier separe
+    for path in corps:
         mesh = trimesh.load(path)
         assert mesh.is_watertight
 
@@ -156,11 +156,11 @@ def test_generate_lightbox_artwork_envelope_unifies_disjoint_parts_into_one_body
     capot_a = [p for p in result.written if p.name.endswith("_capot_couleur_a.stl")]
     capot_b = [p for p in result.written if p.name.endswith("_capot_couleur_b.stl")]
     assert len(corps) == 1
-    assert len(fond) == 1
+    assert fond == []  # fond fusionne dans le corps, pas de fichier separe
     assert len(capot_a) == 1
     assert len(capot_b) == 1
 
-    for path in corps + fond + capot_a + capot_b:
+    for path in corps + capot_a + capot_b:
         mesh = trimesh.load(path)
         assert mesh.is_watertight, f"{path} n'est pas watertight"
 

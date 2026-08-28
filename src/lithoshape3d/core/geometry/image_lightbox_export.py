@@ -183,6 +183,7 @@ def generate_lightbox_from_image(
     )
     from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_polygon_mask
     from lithoshape3d.core.geometry.lightbox import build_lightbox_lithophane_face_mesh
+    from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
     from lithoshape3d.core.geometry.vector_lightbox import (
         SHOULDER_DEPTH_MM,
         build_vector_lightbox_back_panel_mesh,
@@ -288,25 +289,31 @@ def generate_lightbox_from_image(
             ("error", f"validation corps : {', '.join(body_validation.issues())}")
         )
         return result
-    body_path = output_dir / f"{slug}_corps.stl"
-    export_stl(body_mesh, body_path)
-    result.written.append(body_path)
 
-    # Fond : meme extrusion vectorielle, plein, sans cavite.
+    # Fond fusionne au corps par union booleene (meme moteur manifold3d que
+    # le reste du pipeline) : le corps seul n'a pas de fond (cavite ouverte
+    # par le bas, voir vector_lightbox.py), donc les exporter separement
+    # produisait deux pieces a assembler/coller -- retour utilisateur : "le
+    # fond et la box ne doivent faire qu'une piece".
     try:
         back_panel_mesh = build_vector_lightbox_back_panel_mesh(outer, back_thickness_mm)
     except ValueError as exc:
         result.messages.append(("error", f"fond : {exc}"))
-    else:
-        back_validation = validate_mesh(back_panel_mesh)
-        if back_validation.is_valid:
-            back_path = output_dir / f"{slug}_fond.stl"
-            export_stl(back_panel_mesh, back_path)
-            result.written.append(back_path)
-        else:
-            result.messages.append(
-                ("error", f"validation fond : {', '.join(back_validation.issues())}")
-            )
+        back_panel_mesh = None
+
+    combined_body_mesh = body_mesh
+    if back_panel_mesh is not None:
+        combined_body_mesh = _from_manifold(_to_manifold(body_mesh) + _to_manifold(back_panel_mesh))
+
+    combined_validation = validate_mesh(combined_body_mesh)
+    if not combined_validation.is_valid:
+        result.messages.append(
+            ("error", f"validation corps+fond : {', '.join(combined_validation.issues())}")
+        )
+        return result
+    body_path = output_dir / f"{slug}_corps.stl"
+    export_stl(combined_body_mesh, body_path)
+    result.written.append(body_path)
 
     # Capot : plat/lisse par defaut, lithophanie si une image est fournie,
     # ou deux pieces plates complementaires (encre/fond) en mode 2 couleurs.

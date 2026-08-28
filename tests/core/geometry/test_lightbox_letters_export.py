@@ -154,10 +154,12 @@ def test_letter_back_panel_is_smooth_solid_extrusion():
     assert back_mesh.volume == pytest.approx(outer.area * 1.2, rel=0.02)
 
 
-def test_generate_lightbox_letters_exports_back_panel_stl(tmp_path):
-    """Regression pour le bug rapporte : le fond (back panel) doit
-    desormais etre exporte en STL pour chaque lettre, pas seulement calcule
-    et jete."""
+def test_generate_lightbox_letters_fuses_back_panel_into_body(tmp_path):
+    """Regression : le fond (back panel) doit etre fusionne (union
+    booleenne) dans le corps -- une seule piece imprimable par lettre, pas
+    deux fichiers separes a coller (retour utilisateur : "le fond et la box
+    ne doivent faire qu'une piece"). Pas de `_fond.stl` distinct ; le corps
+    doit inclure le volume du fond (mesh watertight fermant bien le bas)."""
     result = generate_lightbox_letters(
         "AI",
         str(_BOLD_FONT),
@@ -170,12 +172,16 @@ def test_generate_lightbox_letters_exports_back_panel_stl(tmp_path):
 
     assert not result.errors, result.errors
     fond_files = [p for p in result.written if p.name.endswith("_fond.stl")]
-    assert len(fond_files) == 2  # une par lettre de "AI"
+    assert fond_files == []
 
-    for path in fond_files:
+    corps_files = [p for p in result.written if p.name.endswith("_corps.stl")]
+    assert len(corps_files) == 2  # une par lettre de "AI"
+
+    for path in corps_files:
         assert path.exists()
         mesh = trimesh.load(path)
         assert mesh.is_watertight
+        assert mesh.bounds[0][2] <= 0.05  # le corps ferme bien un fond pres de Z=0
 
 
 def test_generate_lightbox_letters_produces_watertight_smooth_bodies(tmp_path):
