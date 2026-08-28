@@ -10,8 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lithoshape3d.core.scene.models import GeometryParameters, ImageTransform
+
+if TYPE_CHECKING:
+    import trimesh
 
 
 @dataclass
@@ -121,62 +125,23 @@ def rasterize_letter_shape_mask_for_index(
     return rasterize_letter_mask(letter, layout.width_mm, layout.height_mm, rows, cols)
 
 
-SHOULDER_DEPTH_MM = 1.75
-"""Profondeur (Z) sur laquelle le capot s'encastre dans l'epaulement du
-corps. Choisie au milieu de la plage 1.5-2mm suggeree : assez pour une
-tenue mecanique reelle (empeche le capot de glisser lateralement une fois
-pose, pas seulement pose a plat sur les parois), assez peu pour ne pas trop
-mordre sur l'epaisseur imprimee du capot lithophanie a cet endroit (le
-capot garde son relief normal au-dela de cette zone d'encastrement)."""
-
-SHOULDER_WIDTH_MM = 1.25
-"""Largeur (XY, en retrait vers l'interieur) du rebord d'epaulement.
-Choisie au milieu de la plage 1-1.5mm suggeree : assez pour tenir
-mecaniquement un capot fin sans dependre d'une tolerance d'impression trop
-serree, assez peu pour ne pas fragiliser une paroi deja fine
-(wall_thickness_mm typique 1.6-2mm pour LightBox Letters)."""
-
-ASSEMBLY_CLEARANCE_MM = 0.15
-"""Jeu d'assemblage FDM (rayon, donc par cote) entre le capot et
-l'ouverture de l'epaulement : valeur usuelle pour une impression FDM
-standard (buse 0.4mm), au milieu de la plage 0.1-0.2mm suggeree -- assez
-pour que le capot s'encastre sans forcer malgre les tolerances
-d'impression habituelles, assez peu pour rester maintenu sans jeu excessif."""
-
-
-def _extrude_geom(geom, height: float, z0: float):
-    """Extrude une geometrie Shapely (`Polygon` ou `MultiPolygon`, chaque
-    composante extrudee separement puis unies par union manifold3d) sur
-    `height` mm, translatee en Z a `z0`. `None` si `geom` est vide/degeneree.
-
-    Une union manifold3d (pas une simple concatenation de meshes) est
-    necessaire des qu'un glyphe a plusieurs composantes disjointes (i, j, %,
-    :) : deux extrusions independantes ne partagent aucune face a fusionner,
-    mais rester deux corps disjoints dans le meme fichier STL est un mesh
-    valide -- l'union reste utile pour uniformiser le traitement en aval
-    (une difference booleenne unique avec la cavite)."""
-    import trimesh
-
-    from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
-
-    if geom is None or geom.is_empty:
-        return None
-    polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
-    meshes = []
-    for poly in polys:
-        if poly.is_empty or poly.area <= 0:
-            continue
-        mesh = trimesh.creation.extrude_polygon(poly, height=height)
-        mesh.apply_translation((0.0, 0.0, z0))
-        meshes.append(mesh)
-    if not meshes:
-        return None
-    if len(meshes) == 1:
-        return meshes[0]
-    merged = _to_manifold(meshes[0])
-    for mesh in meshes[1:]:
-        merged = merged + _to_manifold(mesh)
-    return _from_manifold(merged)
+# Refactor (LightBox depuis image) : le moteur d'extrusion vectorielle
+# "parois lisses + epaulement" (corps/fond/footprint de capot) a ete
+# generalise et deplace vers `vector_lightbox.py` -- il ne dependait deja
+# d'AUCUNE particularite des lettres (uniquement de `letter.to_shapely()`
+# en entree), donc reutilisable tel quel pour une silhouette extraite
+# d'image. Les fonctions "lettre" ci-dessous restent EXACTEMENT les memes
+# noms/signatures/comportements (verifie par les tests existants, non
+# modifies) : de fines enveloppes qui appellent le moteur partage avec
+# `letter.to_shapely()`.
+from lithoshape3d.core.geometry.vector_lightbox import (
+    ASSEMBLY_CLEARANCE_MM,
+    SHOULDER_DEPTH_MM,
+    SHOULDER_WIDTH_MM,
+    build_vector_lightbox_back_panel_mesh,
+    build_vector_lightbox_body_mesh,
+    vector_lightbox_cap_footprint,
+)
 
 
 def build_lightbox_letter_body_mesh(
@@ -186,7 +151,7 @@ def build_lightbox_letter_body_mesh(
     *,
     shoulder_depth_mm: float = SHOULDER_DEPTH_MM,
     shoulder_width_mm: float = SHOULDER_WIDTH_MM,
-) -> tuple["trimesh.Trimesh", list[str]]:
+) -> tuple[trimesh.Trimesh, list[str]]:
     """Construit le corps (parois seules, sans fond -- meme convention que
     `build_lightbox_body_mesh` V1) d'un caisson de lettre par EXTRUSION
     DIRECTE du contour vectoriel exact (`letter.to_shapely()`), au lieu de
@@ -197,62 +162,16 @@ def build_lightbox_letter_body_mesh(
 
     Fonction ADDITIVE et INDEPENDANTE de `build_lightbox_body_mesh`
     (`lightbox.py`) : ne modifie en rien le comportement de
-    `lightbox-text`/V1."""
-    import trimesh  # noqa: F401  (import garde pour l'annotation de retour ci-dessus)
-
-    from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
-
+    `lightbox-text`/V1. Enveloppe fine autour du moteur partage
+    `vector_lightbox.build_vector_lightbox_body_mesh`."""
     outer = letter.to_shapely()
-    if outer.is_empty:
-        raise ValueError("Contour de lettre vide : corps impossible.")
-
-    warnings: list[str] = []
-    eps = min(0.05, depth_mm * 0.001)
-
-    outer_mesh = _extrude_geom(outer, depth_mm + 2 * eps, -eps)
-    if outer_mesh is None:
-        raise ValueError("Contour de lettre degenere : corps impossible.")
-
-    shoulder_top = max(depth_mm - shoulder_depth_mm, eps)
-
-    cavity_meshes = []
-
-    inner_lower = outer.buffer(-wall_thickness_mm)
-    lower_height = shoulder_top + 2 * eps
-    lower_mesh = _extrude_geom(inner_lower, lower_height, -eps) if lower_height > 0 else None
-    if lower_mesh is not None:
-        cavity_meshes.append(lower_mesh)
-    else:
-        warnings.append(
-            "Epaisseur de paroi trop grande pour la largeur de la lettre : "
-            "corps plein (aucune cavite) sur la majeure partie de sa hauteur."
-        )
-
-    inner_shoulder = outer.buffer(-(wall_thickness_mm + shoulder_width_mm))
-    upper_height = (depth_mm - shoulder_top) + 2 * eps
-    upper_mesh = (
-        _extrude_geom(inner_shoulder, upper_height, shoulder_top - eps)
-        if upper_height > 0
-        else None
+    return build_vector_lightbox_body_mesh(
+        outer,
+        depth_mm,
+        wall_thickness_mm,
+        shoulder_depth_mm=shoulder_depth_mm,
+        shoulder_width_mm=shoulder_width_mm,
     )
-    if upper_mesh is not None:
-        cavity_meshes.append(upper_mesh)
-    else:
-        warnings.append(
-            "Lettre trop fine pour creuser un epaulement a cette largeur de paroi : "
-            "le sommet du corps reste plein localement (le capot reposera a plat)."
-        )
-
-    if not cavity_meshes:
-        return outer_mesh, warnings
-
-    merged_cavity = _to_manifold(cavity_meshes[0])
-    for mesh in cavity_meshes[1:]:
-        merged_cavity = merged_cavity + _to_manifold(mesh)
-    body_mesh = _from_manifold(_to_manifold(outer_mesh) - merged_cavity)
-    if body_mesh.is_empty:
-        raise ValueError("Caisson impossible : la cavite supprime tout le volume de la lettre.")
-    return body_mesh, warnings
 
 
 def build_lightbox_letter_back_panel_mesh(letter, back_thickness_mm: float):
@@ -260,12 +179,10 @@ def build_lightbox_letter_back_panel_mesh(letter, back_thickness_mm: float):
     vectoriel exact de la lettre (comme le corps) : lisse, plein, sans
     cavite -- meme piece separee (a coller) que le fond V1
     (`build_lightbox_back_panel_mesh`), mais sans repasser par le
-    raster/heightfield."""
+    raster/heightfield. Enveloppe fine autour du moteur partage
+    `vector_lightbox.build_vector_lightbox_back_panel_mesh`."""
     outer = letter.to_shapely()
-    mesh = _extrude_geom(outer, back_thickness_mm, 0.0)
-    if mesh is None:
-        raise ValueError("Contour de lettre degenere : fond impossible.")
-    return mesh
+    return build_vector_lightbox_back_panel_mesh(outer, back_thickness_mm)
 
 
 def letter_cap_footprint(
@@ -279,9 +196,15 @@ def letter_cap_footprint(
     du corps : en retrait de `wall_thickness_mm + shoulder_width_mm` par
     rapport au contour exterieur de la lettre (meme retrait que la cavite
     d'epaulement), plus `assembly_clearance_mm` de jeu d'assemblage FDM par
-    cote pour que le capot rentre sans forcer a l'impression."""
+    cote pour que le capot rentre sans forcer a l'impression. Enveloppe fine
+    autour du moteur partage `vector_lightbox.vector_lightbox_cap_footprint`."""
     outer = letter.to_shapely()
-    return outer.buffer(-(wall_thickness_mm + shoulder_width_mm + assembly_clearance_mm))
+    return vector_lightbox_cap_footprint(
+        outer,
+        wall_thickness_mm,
+        shoulder_width_mm=shoulder_width_mm,
+        assembly_clearance_mm=assembly_clearance_mm,
+    )
 
 
 def generate_lightbox_letters(

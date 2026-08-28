@@ -810,6 +810,10 @@ class MainWindow(QMainWindow):
         lightbox_letters_action.triggered.connect(self._open_lightbox_letters_dialog)
         tools_menu.addAction(lightbox_letters_action)
 
+        lightbox_image_action = QAction("LightBox depuis image...", self)
+        lightbox_image_action.triggered.connect(self._open_lightbox_image_dialog)
+        tools_menu.addAction(lightbox_image_action)
+
         help_menu = self.menuBar().addMenu("Aide")
         about_action = QAction("A propos", self)
         about_action.triggered.connect(self._show_about)
@@ -1868,6 +1872,12 @@ class MainWindow(QMainWindow):
         from lithoshape3d.ui.lightbox_letters_dialog import LightboxLettersDialog
 
         dialog = LightboxLettersDialog(self)
+        dialog.exec()
+
+    def _open_lightbox_image_dialog(self) -> None:
+        from lithoshape3d.ui.lightbox_image_dialog import LightboxImageDialog
+
+        dialog = LightboxImageDialog(self)
         dialog.exec()
 
     def _show_about(self) -> None:

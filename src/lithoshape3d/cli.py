@@ -85,6 +85,47 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Transform de cadrage pour la lettre d'index INDEX. Repetable.",
     )
 
+    image_box = subparsers.add_parser(
+        "lightbox-image",
+        help="Genere un caisson lumineux vectoriel a partir d'une silhouette extraite d'image",
+    )
+    image_box.add_argument("--image", required=True, help="Image source (PNG/JPG/SVG)")
+    image_box.add_argument("--output-dir", required=True, help="Dossier de sortie")
+    image_box.add_argument("--width-mm", type=float, default=100.0, help="Largeur en mm")
+    image_box.add_argument("--depth-mm", type=float, default=25.0, help="Profondeur du caisson en mm")
+    image_box.add_argument(
+        "--wall-thickness-mm", type=float, default=1.6, help="Epaisseur des parois en mm"
+    )
+    image_box.add_argument("--back-thickness-mm", type=float, default=1.2, help="Epaisseur du fond en mm")
+    image_box.add_argument(
+        "--threshold",
+        default="auto",
+        metavar="auto|0-255",
+        help="Seuillage Cas B (photo sans transparence) : 'auto' (Otsu) ou une valeur manuelle 0-255.",
+    )
+    image_box.add_argument(
+        "--min-component-area-ratio",
+        type=float,
+        default=0.001,
+        help="Aire minimale (fraction de l'aire totale) pour qu'une composante ne soit pas consideree comme du bruit.",
+    )
+    image_box.add_argument(
+        "--cap-thickness-mm",
+        type=float,
+        default=None,
+        help="Epaisseur du capot plat/lisse (mode par defaut, sans lithophanie).",
+    )
+    image_box.add_argument("--cap-image", default=None, help="Image de lithophanie optionnelle pour le capot")
+    image_box.add_argument(
+        "--cap-transform",
+        default=None,
+        metavar="offset_x=..,offset_y=..,scale=..,rotation_deg=..",
+        help="Transform de cadrage pour l'image du capot (ignore si --cap-image absent).",
+    )
+    image_box.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
+    image_box.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
+    image_box.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
+
     return parser
 
 
@@ -255,6 +296,73 @@ def _cmd_lightbox_letters(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_lightbox_image(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.geometry.image_lightbox_export import (
+        DEFAULT_CAP_THICKNESS_MM,
+        generate_lightbox_from_image,
+    )
+
+    image_path = args.image
+    if str(image_path).lower().endswith(".svg"):
+        # SVG -> PNG rasterise (Qt, via QtSvg) : responsabilite de cette
+        # couche CLI, pas de core/ (qui ne doit jamais dependre de Qt, cf.
+        # test_architecture_boundaries.py) -- meme mecanisme que le Shape
+        # Composer pour un SVG importe (ui/shape_svg_import.py).
+        from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
+
+        image_path = rasterize_svg_to_alpha_png(str(image_path))
+
+    threshold_raw = args.threshold.strip()
+    if threshold_raw.lower() == "auto":
+        threshold_mode, threshold_value = "auto", None
+    else:
+        try:
+            threshold_value = int(threshold_raw)
+        except ValueError:
+            print(f"ECHEC: --threshold invalide : '{threshold_raw}' (attendu 'auto' ou 0-255).")
+            return 1
+        if not (0 <= threshold_value <= 255):
+            print(f"ECHEC: --threshold hors plage : {threshold_value} (attendu 0-255).")
+            return 1
+        threshold_mode = "manual"
+
+    cap_transform = _parse_transform(args.cap_transform) if args.cap_transform else None
+
+    kwargs = {
+        "width_mm": args.width_mm,
+        "depth_mm": args.depth_mm,
+        "wall_thickness_mm": args.wall_thickness_mm,
+        "back_thickness_mm": args.back_thickness_mm,
+        "threshold_mode": threshold_mode,
+        "threshold_value": threshold_value,
+        "min_component_area_ratio": args.min_component_area_ratio,
+        "cap_image_path": args.cap_image,
+        "cap_image_transform": cap_transform,
+        "resolution": args.resolution,
+        "min_thickness_mm": args.min_thickness,
+        "max_thickness_mm": args.max_thickness,
+    }
+    if args.cap_thickness_mm is not None:
+        kwargs["cap_thickness_mm"] = args.cap_thickness_mm
+    else:
+        kwargs["cap_thickness_mm"] = DEFAULT_CAP_THICKNESS_MM
+
+    result = generate_lightbox_from_image(image_path, args.output_dir, **kwargs)
+
+    for level, text in result.messages:
+        prefix = "ECHEC" if level == "error" else "AVERTISSEMENT"
+        print(f"{prefix}: {text}")
+
+    if not result.ok:
+        print("ECHEC: aucun fichier n'a pu etre genere.")
+        return 1
+
+    if result.threshold_used is not None:
+        print(f"Seuil utilise : {result.threshold_used}")
+    print("OK:", ", ".join(str(path) for path in result.written))
+    return 0
+
+
 def _cmd_launch_app() -> int:
     from lithoshape3d.ui.app import run_app
 
@@ -274,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_lightbox_text(args)
     if args.command == "lightbox-letters":
         return _cmd_lightbox_letters(args)
+    if args.command == "lightbox-image":
+        return _cmd_lightbox_image(args)
 
     return _cmd_launch_app()
 

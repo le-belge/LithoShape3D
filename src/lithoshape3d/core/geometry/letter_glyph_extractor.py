@@ -45,6 +45,19 @@ Decisions de conception (voir rapport de tache) :
   DXF) traite alors la lettre comme l'UNION de toutes ses composantes -- un
   seul caisson "corps" par lettre, meme si son capot/sa silhouette a
   plusieurs ilots disjoints (comportement attendu pour un "i" ou un ":").
+
+Refactor (LightBox depuis image) : la classification par confinement
+geometrique (regroupement contours/trous + reparation d'un trou touchant le
+contour) a ete extraite vers `contour_classification.py` -- generique, sans
+aucune notion de glyphe/police -- pour etre reutilisee telle quelle par
+`image_shape_extractor.py` (silhouettes vectorisees depuis une image), sans
+dupliquer cet algorithme. `GlyphPart` est desormais un simple alias de
+`contour_classification.ContourPart` (meme structure/API : `exterior`,
+`holes`, `to_shapely()`) ; `_classify_contours` ci-dessous reste le point
+d'entree local et traduit `ContourClassificationError` en
+`GlyphExtractionError` pour ne rien changer au contrat de ce module. Aucun
+changement de comportement : tous les tests existants passent sans
+modification.
 """
 
 from __future__ import annotations
@@ -57,7 +70,12 @@ from fontTools.pens.basePen import BasePen
 from fontTools.ttLib import TTFont
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
-from shapely.validation import explain_validity
+
+from lithoshape3d.core.geometry.contour_classification import (
+    ContourClassificationError,
+    ContourPart,
+    classify_contours_by_containment,
+)
 
 _CURVE_SAMPLES = 12  # segments par courbe -- suffisant pour l'impression 3D
 
@@ -66,16 +84,12 @@ class GlyphExtractionError(ValueError):
     """Glyphe absent, ouvert, ou autrement mal forme dans la police source."""
 
 
-@dataclass
-class GlyphPart:
-    """Une composante exterieure disjointe d'un glyphe (ex: le rond du "i"
-    OU sa barre verticale), avec ses propres trous internes eventuels."""
-
-    exterior: list[tuple[float, float]]
-    holes: list[list[tuple[float, float]]] = field(default_factory=list)
-
-    def to_shapely(self) -> Polygon:
-        return Polygon(self.exterior, holes=self.holes)
+# Alias : meme structure/API que `ContourPart` (exterior, holes, to_shapely())
+# -- une composante exterieure disjointe d'un glyphe (ex: le rond du "i" OU
+# sa barre verticale), avec ses propres trous internes eventuels. Conserve
+# comme nom local pour ne rien changer a l'API publique de ce module (type
+# du champ `LetterGlyph.parts`, docstrings existantes).
+GlyphPart = ContourPart
 
 
 @dataclass
@@ -172,88 +186,25 @@ class _FlatteningPen(BasePen):
             )
 
 
-def _repair_touching_hole(
-    exterior_pts: list[tuple[float, float]],
-    holes: list[list[tuple[float, float]]],
-    warnings: list[str],
-) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]]]:
-    """Repare le cas degenere ou un trou touche le contour exterieur (fonts
-    tres condensees) : fusionne via `buffer(0)` et avertit, plutot que de
-    laisser un `Polygon` invalide au sens OGC se propager en aval."""
-    candidate = Polygon(exterior_pts, holes=holes)
-    if candidate.is_valid:
-        return exterior_pts, holes
-
-    reason = explain_validity(candidate)
-    warnings.append(
-        f"Trou interne touchant le contour exterieur detecte et fusionne "
-        f"(police tres condensee) : {reason}."
-    )
-    repaired = candidate.buffer(0)
-    if repaired.geom_type == "Polygon" and list(repaired.interiors):
-        return list(repaired.exterior.coords), [list(ring.coords) for ring in repaired.interiors]
-    # Fusion totale : plus de trou distinguable (repaired peut aussi etre un
-    # MultiPolygon si la reparation a scinde la forme -- on garde alors la
-    # plus grande composante, cas tres rare qui merite un avertissement.
-    if repaired.geom_type == "MultiPolygon":
-        largest = max(repaired.geoms, key=lambda g: g.area)
-        warnings.append(
-            "La reparation du trou touchant le contour a scinde le glyphe en "
-            "plusieurs morceaux ; seul le plus grand est conserve."
-        )
-        return list(largest.exterior.coords), [list(r.coords) for r in largest.interiors]
-    return exterior_pts if repaired.is_empty else list(repaired.exterior.coords), []
-
-
 def _classify_contours(
     contours: list[list[tuple[float, float]]],
 ) -> tuple[list[GlyphPart], list[str]]:
     """Groupe les contours d'un glyphe en composantes exterieures DISJOINTES
-    (`GlyphPart`), chacune avec ses propres trous, par confinement
-    geometrique (aucune hypothese even-odd/nonzero specifique a une police).
-
-    Un contour non contenu dans un autre est une nouvelle composante
-    (racine). Un contour contenu dans une composante deja connue est un trou
-    de cette composante. Les composantes sont triees par aire decroissante
-    (la plus grande, generalement le corps principal de la lettre, en
-    premier -- utilise par les proprietes de compatibilite retro
-    `LetterGlyph.exterior`/`.holes`)."""
-    warnings: list[str] = []
-    if not contours:
-        return [], warnings
-
-    rings = []
-    for pts in contours:
-        try:
-            poly = Polygon(pts)
-        except Exception as exc:  # pragma: no cover - defensif
-            raise GlyphExtractionError(f"Contour de glyphe invalide : {exc}") from exc
-        if not poly.is_valid or poly.area == 0:
-            continue
-        rings.append((abs(poly.area), pts, poly))
-
-    if not rings:
-        raise GlyphExtractionError("Aucun contour exploitable dans ce glyphe.")
-
-    rings.sort(key=lambda r: r[0], reverse=True)
-
-    # roots: liste de dicts {exterior, poly, holes} -- une entree par
-    # composante exterieure disjointe deja identifiee.
-    roots: list[dict] = []
-    for area, pts, poly in rings:
-        rep = poly.representative_point()
-        containing_root = next((r for r in roots if r["poly"].contains(rep)), None)
-        if containing_root is not None:
-            containing_root["holes"].append(pts)
-        else:
-            roots.append({"exterior": pts, "poly": poly, "holes": []})
-
-    parts: list[GlyphPart] = []
-    for root in roots:
-        exterior_pts, holes = _repair_touching_hole(root["exterior"], root["holes"], warnings)
-        parts.append(GlyphPart(exterior=exterior_pts, holes=holes))
-
-    return parts, warnings
+    (`GlyphPart`), chacune avec ses propres trous. Fine enveloppe autour de
+    `contour_classification.classify_contours_by_containment` (algorithme
+    partage avec `image_shape_extractor.py`, voir docstring de module) :
+    traduit `ContourClassificationError` en `GlyphExtractionError` pour
+    preserver le contrat de ce module, et precise la cause probable d'un
+    trou touchant le contour ("police tres condensee") dans l'avertissement
+    -- reproduit et verifie par un test reel sur le "0" (zero) de la police
+    systeme macOS `Andale Mono.ttf` (voir test_letter_glyph_extractor.py) :
+    ce glyphe dessine le zero barre avec un anneau interne qui touche
+    l'anneau externe au niveau de la barre oblique, produisant un `Polygon`
+    invalide au sens Shapely avant reparation."""
+    try:
+        return classify_contours_by_containment(contours, touching_hole_note="police tres condensee")
+    except ContourClassificationError as exc:
+        raise GlyphExtractionError(str(exc).replace("cette liste", "ce glyphe")) from exc
 
 
 def extract_word_glyphs(
