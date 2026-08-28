@@ -27,7 +27,24 @@ Decisions de conception (voir rapport de tache) :
   l'aire naive exterieur-trous) et on FUSIONNE (le trou est absorbe, donc
   disparait) via `buffer(0)`, en emettant un avertissement explicite. On ne
   rejette pas la lettre : un caisson sans cette contre-forme reste
-  imprimable, alors qu'un rejet bloquerait tout le mot.
+  imprimable, alors qu'un rejet bloquerait tout le mot. Reproduit et
+  verifie par un test reel sur le "0" (zero) de la police systeme macOS
+  `Andale Mono.ttf` (voir test_letter_glyph_extractor.py) : ce glyphe
+  dessine le zero barre avec un anneau interne qui touche l'anneau externe
+  au niveau de la barre oblique, produisant un `Polygon` invalide au sens
+  Shapely avant reparation.
+- Glyphe multi-composantes disjointes (point du "i"/"j", boucles du "%",
+  double-point ":") : UNE lettre peut legitimement correspondre a PLUSIEURS
+  contours exterieurs disjoints (aucun n'est contenu dans un autre), chacun
+  pouvant lui-meme avoir ses propres trous. `LetterGlyph` modelise donc
+  `parts: list[GlyphPart]` (1..n composantes) plutot qu'un unique
+  exterieur+trous. La classification groupe les contours par confinement
+  geometrique : les contours non contenus dans un autre sont des racines
+  (une composante par racine), les contours contenus dans une racine
+  deviennent ses trous. Le pipeline de generation (rasterisation, export
+  DXF) traite alors la lettre comme l'UNION de toutes ses composantes -- un
+  seul caisson "corps" par lettre, meme si son capot/sa silhouette a
+  plusieurs ilots disjoints (comportement attendu pour un "i" ou un ":").
 """
 
 from __future__ import annotations
@@ -38,7 +55,8 @@ from pathlib import Path
 import numpy as np
 from fontTools.pens.basePen import BasePen
 from fontTools.ttLib import TTFont
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.ops import unary_union
 from shapely.validation import explain_validity
 
 _CURVE_SAMPLES = 12  # segments par courbe -- suffisant pour l'impression 3D
@@ -49,18 +67,46 @@ class GlyphExtractionError(ValueError):
 
 
 @dataclass
+class GlyphPart:
+    """Une composante exterieure disjointe d'un glyphe (ex: le rond du "i"
+    OU sa barre verticale), avec ses propres trous internes eventuels."""
+
+    exterior: list[tuple[float, float]]
+    holes: list[list[tuple[float, float]]] = field(default_factory=list)
+
+    def to_shapely(self) -> Polygon:
+        return Polygon(self.exterior, holes=self.holes)
+
+
+@dataclass
 class LetterGlyph:
     character: str
     index: int
-    exterior: list[tuple[float, float]]
-    """Contour exterieur ferme, en mm, dans le referentiel ABSOLU du mot."""
-    holes: list[list[tuple[float, float]]] = field(default_factory=list)
+    parts: list[GlyphPart]
+    """1..n composantes exterieures disjointes, en mm, referentiel ABSOLU du mot."""
     bbox_mm: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     advance_mm: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
-    def to_shapely(self) -> Polygon:
-        return Polygon(self.exterior, holes=self.holes)
+    @property
+    def exterior(self) -> list[tuple[float, float]]:
+        """Compatibilite retro : exterieur de la premiere composante (la
+        plus grande, par construction de `_classify_contours`)."""
+        return self.parts[0].exterior
+
+    @property
+    def holes(self) -> list[list[tuple[float, float]]]:
+        """Compatibilite retro : trous de la premiere composante uniquement.
+        Pour les glyphes multi-composantes, prefer `parts` ou `to_shapely()`."""
+        return self.parts[0].holes
+
+    def to_shapely(self) -> Polygon | MultiPolygon:
+        """Union de toutes les composantes -- represente le glyphe complet,
+        y compris les parties disjointes (point du i/j, boucles du %)."""
+        polygons = [part.to_shapely() for part in self.parts]
+        if len(polygons) == 1:
+            return polygons[0]
+        return unary_union(polygons)
 
 
 @dataclass
@@ -126,14 +172,55 @@ class _FlatteningPen(BasePen):
             )
 
 
-def _classify_contours(contours: list[list[tuple[float, float]]]) -> tuple[
-    list[tuple[float, float]] | None, list[list[tuple[float, float]]], list[str]
-]:
-    """Trie les contours en (exterieur principal, trous), par confinement
-    geometrique. Retourne aussi les avertissements de fusion trou/contour."""
+def _repair_touching_hole(
+    exterior_pts: list[tuple[float, float]],
+    holes: list[list[tuple[float, float]]],
+    warnings: list[str],
+) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]]]:
+    """Repare le cas degenere ou un trou touche le contour exterieur (fonts
+    tres condensees) : fusionne via `buffer(0)` et avertit, plutot que de
+    laisser un `Polygon` invalide au sens OGC se propager en aval."""
+    candidate = Polygon(exterior_pts, holes=holes)
+    if candidate.is_valid:
+        return exterior_pts, holes
+
+    reason = explain_validity(candidate)
+    warnings.append(
+        f"Trou interne touchant le contour exterieur detecte et fusionne "
+        f"(police tres condensee) : {reason}."
+    )
+    repaired = candidate.buffer(0)
+    if repaired.geom_type == "Polygon" and list(repaired.interiors):
+        return list(repaired.exterior.coords), [list(ring.coords) for ring in repaired.interiors]
+    # Fusion totale : plus de trou distinguable (repaired peut aussi etre un
+    # MultiPolygon si la reparation a scinde la forme -- on garde alors la
+    # plus grande composante, cas tres rare qui merite un avertissement.
+    if repaired.geom_type == "MultiPolygon":
+        largest = max(repaired.geoms, key=lambda g: g.area)
+        warnings.append(
+            "La reparation du trou touchant le contour a scinde le glyphe en "
+            "plusieurs morceaux ; seul le plus grand est conserve."
+        )
+        return list(largest.exterior.coords), [list(r.coords) for r in largest.interiors]
+    return exterior_pts if repaired.is_empty else list(repaired.exterior.coords), []
+
+
+def _classify_contours(
+    contours: list[list[tuple[float, float]]],
+) -> tuple[list[GlyphPart], list[str]]:
+    """Groupe les contours d'un glyphe en composantes exterieures DISJOINTES
+    (`GlyphPart`), chacune avec ses propres trous, par confinement
+    geometrique (aucune hypothese even-odd/nonzero specifique a une police).
+
+    Un contour non contenu dans un autre est une nouvelle composante
+    (racine). Un contour contenu dans une composante deja connue est un trou
+    de cette composante. Les composantes sont triees par aire decroissante
+    (la plus grande, generalement le corps principal de la lettre, en
+    premier -- utilise par les proprietes de compatibilite retro
+    `LetterGlyph.exterior`/`.holes`)."""
     warnings: list[str] = []
     if not contours:
-        return None, [], warnings
+        return [], warnings
 
     rings = []
     for pts in contours:
@@ -149,42 +236,24 @@ def _classify_contours(contours: list[list[tuple[float, float]]]) -> tuple[
         raise GlyphExtractionError("Aucun contour exploitable dans ce glyphe.")
 
     rings.sort(key=lambda r: r[0], reverse=True)
-    exterior_area, exterior_pts, exterior_poly = rings[0]
-    holes: list[list[tuple[float, float]]] = []
 
-    for area, pts, poly in rings[1:]:
+    # roots: liste de dicts {exterior, poly, holes} -- une entree par
+    # composante exterieure disjointe deja identifiee.
+    roots: list[dict] = []
+    for area, pts, poly in rings:
         rep = poly.representative_point()
-        if exterior_poly.contains(rep):
-            holes.append(pts)
+        containing_root = next((r for r in roots if r["poly"].contains(rep)), None)
+        if containing_root is not None:
+            containing_root["holes"].append(pts)
         else:
-            # Partie exterieure additionnelle (ex: point du "i", barre du
-            # "=") : on l'ignore pour le contour principal -- non supporte
-            # par ce module V1 (glyphe multi-composantes disjointes). On
-            # documente plutot que de crasher.
-            warnings.append(
-                "Composante de glyphe disjointe ignoree (glyphe multi-parties "
-                "non supporte en V1, ex. point de 'i'/'j')."
-            )
+            roots.append({"exterior": pts, "poly": poly, "holes": []})
 
-    # Detection trou touchant le contour (degenere) : le polygone
-    # exterieur-moins-trous doit rester un unique Polygon valide non
-    # degenere. Sinon on fusionne (le trou est absorbe) et on avertit.
-    candidate = Polygon(exterior_pts, holes=holes)
-    if not candidate.is_valid:
-        reason = explain_validity(candidate)
-        warnings.append(
-            f"Trou interne touchant le contour exterieur detecte et fusionne "
-            f"(police tres condensee) : {reason}."
-        )
-        repaired = candidate.buffer(0)
-        if repaired.geom_type == "Polygon" and list(repaired.interiors):
-            holes = [list(ring.coords) for ring in repaired.interiors]
-            exterior_pts = list(repaired.exterior.coords)
-        else:
-            # Fusion totale : plus de trou distinguable.
-            holes = []
+    parts: list[GlyphPart] = []
+    for root in roots:
+        exterior_pts, holes = _repair_touching_hole(root["exterior"], root["holes"], warnings)
+        parts.append(GlyphPart(exterior=exterior_pts, holes=holes))
 
-    return exterior_pts, holes, warnings
+    return parts, warnings
 
 
 def extract_word_glyphs(
@@ -254,35 +323,47 @@ def extract_word_glyphs(
                 "non trace) -- verifiez la police source."
             )
 
-        exterior, holes, classify_warnings = _classify_contours(pen.contours)
+        raw_parts, classify_warnings = _classify_contours(pen.contours)
         warnings.extend(f"Lettre '{char}' (#{index}) : {w}" for w in classify_warnings)
 
         def to_mm(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
             return [(x * scale + cursor_x_mm, y * scale) for x, y in pts]
 
-        exterior_mm = to_mm(exterior)
-        holes_mm = [to_mm(h) for h in holes]
+        parts_mm = [
+            GlyphPart(exterior=to_mm(part.exterior), holes=[to_mm(h) for h in part.holes])
+            for part in raw_parts
+        ]
 
-        xs = [p[0] for p in exterior_mm]
-        ys = [p[1] for p in exterior_mm]
+        xs = [p[0] for part in parts_mm for p in part.exterior]
+        ys = [p[1] for part in parts_mm for p in part.exterior]
         bbox = (min(xs), min(ys), max(xs), max(ys))
 
         letter_warnings: list[str] = []
         min_wall_mm = 0.4  # heuristique conservatrice, verifiee par l'appelant CLI
-        glyph_width_mm = bbox[2] - bbox[0]
-        if 0 < glyph_width_mm < min_wall_mm * 2:
+        # Largeur minimale a considerer : la composante la plus fine (ex. la
+        # barre du "i") est le vrai facteur limitant pour l'epaisseur de
+        # paroi, pas la bbox globale du glyphe.
+        narrowest_part_mm = min(
+            (max(p[0] for p in part.exterior) - min(p[0] for p in part.exterior)) for part in parts_mm
+        )
+        if 0 < narrowest_part_mm < min_wall_mm * 2:
             letter_warnings.append(
-                f"Lettre '{char}' tres fine ({glyph_width_mm:.2f} mm) : l'epaisseur "
-                "de paroi demandee risque de depasser la largeur du glyphe -- "
+                f"Lettre '{char}' avec une composante tres fine ({narrowest_part_mm:.2f} mm) : "
+                "l'epaisseur de paroi demandee risque de depasser sa largeur -- "
                 "reduisez wall_thickness_mm ou augmentez font_size_mm."
+            )
+        if len(parts_mm) > 1:
+            letter_warnings.append(
+                f"Lettre '{char}' composee de {len(parts_mm)} composantes disjointes "
+                "(ex. point de i/j, boucles de %) -- generees comme un seul caisson "
+                "avec plusieurs ilots dans la silhouette."
             )
 
         letters.append(
             LetterGlyph(
                 character=char,
                 index=index,
-                exterior=exterior_mm,
-                holes=holes_mm,
+                parts=parts_mm,
                 bbox_mm=bbox,
                 advance_mm=advance_mm,
                 warnings=letter_warnings,
@@ -342,8 +423,9 @@ def rasterize_letter_mask(
 
     image = Image.new("1", (cols, rows), 0)
     draw = ImageDraw.Draw(image)
-    draw.polygon(mm_to_px(letter.exterior), fill=1)
-    for hole in letter.holes:
-        draw.polygon(mm_to_px(hole), fill=0)
+    for part in letter.parts:
+        draw.polygon(mm_to_px(part.exterior), fill=1)
+        for hole in part.holes:
+            draw.polygon(mm_to_px(hole), fill=0)
 
     return np.array(image, dtype=bool)

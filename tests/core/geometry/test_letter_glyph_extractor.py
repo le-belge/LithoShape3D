@@ -9,7 +9,15 @@ from lithoshape3d.core.geometry.letter_glyph_extractor import (
 )
 
 _SYSTEM_FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
-_CONDENSED_FONT = Path("/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf")
+# Police macOS avec un "0" (zero barre) dont l'anneau interne touche
+# reellement l'anneau externe au niveau de la barre oblique -- trouvee par
+# balayage systematique de toutes les polices systeme macOS (Supplemental +
+# Fonts) sur les caracteres alphanumeriques + quelques symboles, en cherchant
+# un `shapely.Polygon(exterieur, holes=[...])` invalide apres classification
+# par confinement geometrique. Resultat : `Andale Mono.ttf` / '0' produit un
+# vrai cas degenere ("Holes are nested"), reproduit et fixe par
+# `test_hole_touching_exterior_is_repaired_on_real_font` ci-dessous.
+_TOUCHING_HOLE_FONT = Path("/System/Library/Fonts/Supplemental/Andale Mono.ttf")
 
 pytestmark = pytest.mark.skipif(
     not _SYSTEM_FONT.exists(), reason="Police systeme Arial.ttf indisponible sur cette machine."
@@ -74,22 +82,57 @@ def test_rasterize_letter_mask_matches_shape_at_canvas_scale():
     assert not mask.all()
 
 
-def test_hole_touching_exterior_documented_or_handled():
-    """Cas degenere : trou touchant le contour exterieur (fonts tres
-    condensees). Non reproductible de facon fiable avec les polices
-    systeme disponibles sur cette machine (Arial Narrow ne produit pas ce
-    defaut ; il apparait surtout sur des fontes bitmap->vecteur mal
-    convertie ou des tailles d'impression extremes, hors scope d'un test
-    unitaire deterministe). Le chemin de code correspondant
-    (`_classify_contours`, fusion via `buffer(0)` + avertissement) est
-    exerce indirectement par `test_letter_with_two_holes` (B) et
-    `test_letter_with_one_hole` (A) qui passent tous deux par
-    `_classify_contours` sans avertissement de fusion, validant le chemin
-    nominal. Le chemin de fusion degenere reste documente dans le docstring
-    du module mais n'est pas couvert par un test avec police reelle."""
-    if not _CONDENSED_FONT.exists():
-        pytest.skip("Police condensee non disponible pour tenter de reproduire le cas.")
-    layout = extract_word_glyphs("B", _CONDENSED_FONT, font_size_mm=6.0)
-    # A cette taille tres reduite, on verifie au moins que l'extraction ne
-    # plante pas et reste coherente (0..n trous valides).
-    assert layout.letters[0].character == "B"
+@pytest.mark.skipif(
+    not _TOUCHING_HOLE_FONT.exists(),
+    reason="Police Andale Mono.ttf indisponible sur cette machine (voir recherche ci-dessus).",
+)
+def test_hole_touching_exterior_is_repaired_on_real_font():
+    """Cas degenere reellement reproduit (pas un mock) : le glyphe "0" de
+    `Andale Mono.ttf` dessine un zero barre dont l'anneau interne touche
+    l'anneau externe au niveau de la barre oblique. `Polygon(exterieur,
+    holes=[trou])` est alors invalide au sens OGC avant reparation -- on
+    verifie que l'extraction ne plante pas, produit un avertissement
+    explicite mentionnant la fusion, et retourne un contour final valide."""
+    layout = extract_word_glyphs("0", _TOUCHING_HOLE_FONT, font_size_mm=20.0)
+    letter = layout.letters[0]
+
+    assert any("fusionne" in w for w in layout.warnings)
+    for part in letter.parts:
+        assert part.to_shapely().is_valid
+
+
+def test_multi_part_glyph_i_keeps_both_disjoint_components():
+    """Le "i" est fait de deux composantes exterieures disjointes (le point
+    et la barre), aucune contenue dans l'autre. Les DEUX doivent survivre
+    -- avant ce correctif, seule la plus grande (la barre) etait gardee et
+    le point etait jete silencieusement."""
+    layout = extract_word_glyphs("i", _SYSTEM_FONT, font_size_mm=20.0)
+    letter = layout.letters[0]
+
+    assert len(letter.parts) == 2
+    # Les deux composantes doivent etre verticalement disjointes (le point
+    # au-dessus de la barre), preuve que ce sont bien deux ilots distincts
+    # et pas un artefact de decoupe d'un seul contour.
+    tops = sorted(max(p[1] for p in part.exterior) for part in letter.parts)
+    bottoms = sorted(min(p[1] for p in part.exterior) for part in letter.parts)
+    assert bottoms[1] >= tops[0]  # la composante haute ne chevauche pas la basse
+
+    mask = rasterize_letter_mask(letter, layout.width_mm, layout.height_mm, 200, 200)
+    assert mask.any()
+
+    polygon = letter.to_shapely()
+    assert polygon.geom_type == "MultiPolygon"
+    assert len(polygon.geoms) == 2
+
+
+def test_multi_part_glyph_percent_keeps_all_components_and_holes():
+    """Le "%" a typiquement 2-3 composantes disjointes (deux ronds troues +
+    la barre oblique). Toutes doivent etre conservees, avec leurs trous
+    respectifs intacts."""
+    layout = extract_word_glyphs("%", _SYSTEM_FONT, font_size_mm=20.0)
+    letter = layout.letters[0]
+
+    assert len(letter.parts) >= 2
+    # Au moins deux composantes doivent avoir un trou (les deux ronds du %).
+    parts_with_holes = [p for p in letter.parts if p.holes]
+    assert len(parts_with_holes) >= 2

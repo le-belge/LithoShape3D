@@ -278,11 +278,17 @@ def _cmd_lightbox_letters(args: argparse.Namespace) -> int:
             print(f"AVERTISSEMENT lettre '{letter.character}' (#{letter.index}): {w}")
 
         min_wall = args.wall_thickness
-        glyph_width = letter.bbox_mm[2] - letter.bbox_mm[0]
-        if glyph_width < min_wall * 2:
+        # La composante la plus fine (ex. la barre du "i") est le vrai
+        # facteur limitant, pas la bbox globale du glyphe (qui peut inclure
+        # plusieurs composantes disjointes largement espacees).
+        narrowest_part = min(
+            (max(p[0] for p in part.exterior) - min(p[0] for p in part.exterior))
+            for part in letter.parts
+        )
+        if narrowest_part < min_wall * 2:
             print(
                 f"AVERTISSEMENT: lettre '{letter.character}' (#{letter.index}) trop fine "
-                f"({glyph_width:.2f} mm) pour l'epaisseur de paroi demandee "
+                f"({narrowest_part:.2f} mm) pour l'epaisseur de paroi demandee "
                 f"({min_wall} mm) -- caisson ignore pour cette lettre."
             )
             continue
