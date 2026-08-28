@@ -70,6 +70,7 @@ from lithoshape3d.core.image.preprocessing import (
 )
 from lithoshape3d.core.scene.mask_io import load_zone_mask
 from lithoshape3d.core.scene.models import (
+    BacklightInsertParams,
     ColorStrategy,
     CompositionMode,
     GeometryParameters,
@@ -472,7 +473,7 @@ class MainWindow(QMainWindow):
         self.backlight_skin_spin.setRange(0.05, 2.0)
         self.backlight_skin_spin.setSingleStep(0.05)
         self.backlight_skin_spin.setSuffix(" mm")
-        self.backlight_skin_spin.setValue(0.40)
+        self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
         self.backlight_skin_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
         color_strategy_form.addRow("Epaisseur peau blanche", self.backlight_skin_spin)
 
