@@ -68,6 +68,12 @@ def _build_parser() -> argparse.ArgumentParser:
     letters.add_argument("--depth", type=float, default=25.0, help="Profondeur du caisson en mm")
     letters.add_argument("--wall-thickness", type=float, default=1.6, help="Epaisseur des parois")
     letters.add_argument("--back-thickness", type=float, default=1.2, help="Epaisseur du fond")
+    letters.add_argument(
+        "--cap-thickness",
+        type=float,
+        default=1.2,
+        help="Epaisseur du capot plat (mm) -- l'epaulement de retention est ajuste pour correspondre exactement.",
+    )
     letters.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
     letters.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
     letters.add_argument(
@@ -318,6 +324,7 @@ def _cmd_lightbox_letters(args: argparse.Namespace) -> int:
         depth_mm=args.depth,
         wall_thickness_mm=args.wall_thickness,
         back_thickness_mm=args.back_thickness,
+        cap_thickness_mm=args.cap_thickness,
         min_thickness_mm=args.min_thickness,
         max_thickness_mm=args.max_thickness,
         images_by_index=images_by_index,

@@ -189,6 +189,17 @@ class LightboxImageDialog(QDialog):
         self.back_spin.setSuffix(" mm")
         form.addRow("Epaisseur du fond", self.back_spin)
 
+        self.cap_thickness_spin = QDoubleSpinBox()
+        self.cap_thickness_spin.setRange(0.4, 20.0)
+        self.cap_thickness_spin.setSingleStep(0.1)
+        self.cap_thickness_spin.setValue(1.5)
+        self.cap_thickness_spin.setSuffix(" mm")
+        self.cap_thickness_spin.setToolTip(
+            "Epaisseur du capot plat -- l'epaulement de retention (rebord interieur) est "
+            "ajuste automatiquement pour correspondre exactement, afin que le capot affleure."
+        )
+        form.addRow("Epaisseur du capot (plat)", self.cap_thickness_spin)
+
         self.threshold_row_widget = QWidget()
         threshold_row = QHBoxLayout(self.threshold_row_widget)
         threshold_row.setContentsMargins(0, 0, 0, 0)
@@ -579,6 +590,7 @@ class LightboxImageDialog(QDialog):
             depth_mm=self.depth_spin.value(),
             wall_thickness_mm=self.wall_spin.value(),
             back_thickness_mm=self.back_spin.value(),
+            cap_thickness_mm=self.cap_thickness_spin.value(),
             threshold_mode=threshold_mode,
             threshold_value=threshold_value,
             cap_image_path=cap_image_path,

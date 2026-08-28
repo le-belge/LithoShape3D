@@ -217,6 +217,27 @@ def generate_lightbox_from_image(
                 "-- les deux couleurs sont decoupees depuis l'encre du dessin source lui-meme."
             )
 
+    # Profondeur d'epaulement (retrait du haut du corps ou le capot vient
+    # s'encastrer) : pour un capot PLAT (flat/flat_two_color), elle doit
+    # correspondre EXACTEMENT a `cap_thickness_mm` -- sinon un capot plus
+    # epais que l'epaulement par defaut (SHOULDER_DEPTH_MM=1.75mm) depasse
+    # du corps au lieu d'affleurer, et un capot plus fin flotte dans une
+    # cavite trop profonde sans y etre maintenu. Retour utilisateur : "un
+    # rebord interieur au depart du fond de [depth-cap_thickness] pour que
+    # le capot repose dessus". Pour un capot LITHOPHANE (relief, pas une
+    # epaisseur unique), on garde l'epaulement par defaut du moteur
+    # (`SHOULDER_DEPTH_MM`) -- non concerne par ce retour.
+    effective_shoulder_depth_mm = (
+        cap_thickness_mm
+        if effective_cap_mode in (CAP_MODE_FLAT, CAP_MODE_FLAT_TWO_COLOR)
+        else SHOULDER_DEPTH_MM
+    )
+    if effective_shoulder_depth_mm >= depth_mm:
+        raise ValueError(
+            f"cap_thickness_mm ({cap_thickness_mm:.2f}mm) doit rester inferieur a depth_mm "
+            f"({depth_mm:.2f}mm) : le capot ne peut pas etre plus epais que le caisson."
+        )
+
     ink_polygon = None
     if shape_mode == SHAPE_MODE_SILHOUETTE:
         try:
@@ -281,7 +302,11 @@ def generate_lightbox_from_image(
     # `vector_lightbox.py`.
     try:
         body_mesh, body_warnings = build_vector_lightbox_body_mesh(
-            outer, depth_mm, wall_thickness_mm, back_thickness_mm=back_thickness_mm
+            outer,
+            depth_mm,
+            wall_thickness_mm,
+            back_thickness_mm=back_thickness_mm,
+            shoulder_depth_mm=effective_shoulder_depth_mm,
         )
     except ValueError as exc:
         result.messages.append(("error", f"corps : {exc}"))
@@ -302,7 +327,7 @@ def generate_lightbox_from_image(
     # Capot : plat/lisse par defaut, lithophanie si une image est fournie,
     # ou deux pieces plates complementaires (encre/fond) en mode 2 couleurs.
     cap_polygon = vector_lightbox_cap_footprint(outer, wall_thickness_mm)
-    cap_depth_mm = depth_mm - SHOULDER_DEPTH_MM
+    cap_depth_mm = depth_mm - effective_shoulder_depth_mm
     if cap_polygon.is_empty or cap_polygon.area <= 0:
         result.messages.append(
             (

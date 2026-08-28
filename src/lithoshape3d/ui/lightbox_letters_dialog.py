@@ -150,6 +150,18 @@ class LightboxLettersDialog(QDialog):
         self.wall_spin.valueChanged.connect(self._on_thickness_relevant_changed)
         form.addRow("Epaisseur des parois", self.wall_spin)
 
+        self.cap_thickness_spin = QDoubleSpinBox()
+        self.cap_thickness_spin.setRange(0.4, 20.0)
+        self.cap_thickness_spin.setSingleStep(0.1)
+        self.cap_thickness_spin.setValue(1.2)
+        self.cap_thickness_spin.setSuffix(" mm")
+        self.cap_thickness_spin.setToolTip(
+            "Epaisseur du capot plat (lettres sans image assignee) -- l'epaulement de "
+            "retention (rebord interieur) est ajuste automatiquement pour correspondre "
+            "exactement, afin que le capot affleure."
+        )
+        form.addRow("Epaisseur du capot (plat)", self.cap_thickness_spin)
+
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Lettres du mot (image de lithophanie optionnelle par lettre) :"))
@@ -376,6 +388,7 @@ class LightboxLettersDialog(QDialog):
             font_size_mm=self.font_size_spin.value(),
             depth_mm=self.depth_spin.value(),
             wall_thickness_mm=self.wall_spin.value(),
+            cap_thickness_mm=self.cap_thickness_spin.value(),
             images_by_index=dict(self._image_by_index),
             transforms_by_index=dict(self._transform_by_index),
         )

@@ -223,6 +223,7 @@ def generate_lightbox_letters(
     depth_mm: float = 25.0,
     wall_thickness_mm: float = 1.6,
     back_thickness_mm: float = 1.2,
+    cap_thickness_mm: float = 1.2,
     min_thickness_mm: float | None = None,
     max_thickness_mm: float | None = None,
     images_by_index: dict[int, str] | None = None,
@@ -297,6 +298,16 @@ def generate_lightbox_letters(
 
         prefix = f"{slug}_lettre_{letter.index}_{letter.character.lower()}"
 
+        # Profondeur d'epaulement : pour un capot PLAT (pas d'image assignee
+        # a cette lettre), doit correspondre EXACTEMENT a `cap_thickness_mm`
+        # -- sinon le capot depasse (trop epais pour l'epaulement) ou flotte
+        # sans etre maintenu (trop fin pour la cavite). Retour utilisateur :
+        # "un rebord interieur au depart du fond de [depth-cap_thickness]
+        # pour que le capot repose dessus". Pour un capot LITHOPHANE (relief,
+        # pas une epaisseur unique), on garde l'epaulement par defaut du
+        # moteur (`SHOULDER_DEPTH_MM`).
+        letter_shoulder_depth_mm = SHOULDER_DEPTH_MM if image_path else cap_thickness_mm
+
         # Corps AVEC fond integre : extrusion directe du contour vectoriel
         # exact de la lettre (parois lisses + epaulement de retention du
         # capot, cavite basse partant de `back_thickness_mm` au lieu de
@@ -309,7 +320,11 @@ def generate_lightbox_letters(
         # la box ne doivent faire qu'une piece".
         try:
             body_mesh, body_warnings = build_lightbox_letter_body_mesh(
-                letter, depth_mm, wall_thickness_mm, back_thickness_mm=back_thickness_mm
+                letter,
+                depth_mm,
+                wall_thickness_mm,
+                back_thickness_mm=back_thickness_mm,
+                shoulder_depth_mm=letter_shoulder_depth_mm,
             )
         except ValueError as exc:
             result.messages.append(
@@ -342,7 +357,7 @@ def generate_lightbox_letters(
         cap_shape_mask = rasterize_polygon_mask(
             cap_polygon, layout.width_mm, layout.height_mm, rows, cols
         )
-        cap_depth_mm = depth_mm - SHOULDER_DEPTH_MM
+        cap_depth_mm = depth_mm - letter_shoulder_depth_mm
 
         face_mesh = None
         if image_path:
@@ -350,7 +365,9 @@ def generate_lightbox_letters(
                 image_path, cap_shape_mask, face_params, cap_depth_mm, image_transform
             )
         elif cap_shape_mask.any():
-            solid_box_params = dataclasses.replace(box_params_solid, depth_mm=cap_depth_mm)
+            solid_box_params = dataclasses.replace(
+                box_params_solid, depth_mm=cap_depth_mm, solid_face_thickness_mm=cap_thickness_mm
+            )
             face_mesh = build_lightbox_solid_face_mesh(
                 cap_shape_mask, face_params, solid_box_params
             )
