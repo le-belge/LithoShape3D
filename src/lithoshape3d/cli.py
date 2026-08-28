@@ -58,7 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     letters = subparsers.add_parser(
         "lightbox-letters",
-        help="Genere un caisson lumineux par lettre individuelle (corps + capot + DXF)",
+        help="Genere un caisson lumineux par lettre individuelle (corps + capot + fond + DXF)",
     )
     letters.add_argument("--text", required=True, help="Mot a decouper en lettres")
     letters.add_argument("--font", required=True, help="Chemin vers une police .ttf/.otf")

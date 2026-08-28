@@ -429,3 +429,46 @@ def rasterize_letter_mask(
             draw.polygon(mm_to_px(hole), fill=0)
 
     return np.array(image, dtype=bool)
+
+
+def rasterize_polygon_mask(
+    polygon,
+    canvas_width_mm: float,
+    canvas_height_mm: float,
+    rows: int,
+    cols: int,
+) -> np.ndarray:
+    """Rasterise un polygone Shapely arbitraire (`Polygon` ou `MultiPolygon`,
+    typiquement derive d'un contour de lettre par `buffer()`) dans le meme
+    referentiel canvas du mot entier que `rasterize_letter_mask`.
+
+    Generalisation necessaire pour LightBox Letters avec epaulement : le
+    capot doit etre rasterise depuis un contour RETRECI (cavite
+    d'epaulement, cf. `lightbox_letters_export.py`), pas depuis le contour
+    brut de la lettre -- pas de `LetterGlyph` disponible a ce stade, d'ou
+    une fonction prenant directement une geometrie Shapely."""
+    from PIL import Image, ImageDraw
+
+    if rows <= 0 or cols <= 0:
+        raise ValueError("rows/cols doivent etre > 0.")
+
+    def mm_to_px(pts) -> list[tuple[float, float]]:
+        return [
+            (x / canvas_width_mm * (cols - 1), (canvas_height_mm - y) / canvas_height_mm * (rows - 1))
+            for x, y in pts
+        ]
+
+    image = Image.new("1", (cols, rows), 0)
+    draw = ImageDraw.Draw(image)
+    if polygon is None or polygon.is_empty:
+        return np.array(image, dtype=bool)
+
+    geoms = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
+    for geom in geoms:
+        if geom.is_empty or geom.area <= 0:
+            continue
+        draw.polygon(mm_to_px(list(geom.exterior.coords)), fill=1)
+        for hole in geom.interiors:
+            draw.polygon(mm_to_px(list(hole.coords)), fill=0)
+
+    return np.array(image, dtype=bool)
