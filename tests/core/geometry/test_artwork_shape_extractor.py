@@ -4,12 +4,15 @@ que `test_image_shape_extractor.py`."""
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
 from lithoshape3d.core.geometry.artwork_shape_extractor import (
     ArtworkExtractionError,
+    _fill_enclosed_regions,
+    _search_min_closing_radius,
     compute_envelope_mask,
     extract_artwork_from_arrays,
     extract_artwork_from_image,
@@ -89,6 +92,105 @@ def test_compute_envelope_mask_explicit_radius_sufficient_is_accepted():
     assert before == 2
     assert after == 1
     assert envelope.any()
+
+
+# --------------------------------------------------------------------- #
+# Regression : encoche locale laissee par une fermeture "juste suffisante"
+# pour la connexite GLOBALE mais pas pour la douceur LOCALE du contour --
+# cas reel "Cherry Moon" (voir examples/physical_validation/cherry_moon_
+# source/) ou un des traits fins de l'anneau decoratif etait bien soude au
+# reste du dessin (masque final = 1 seule composante, mesh watertight) mais
+# laissait une concavite en V/marche anormale a l'endroit precis de la
+# soudure la plus juste. `_search_min_closing_radius` ne garantit que la
+# connexite globale au plus petit rayon possible, jamais la douceur locale
+# de CHAQUE jonction -- `compute_envelope_mask` doit desormais rattraper ce
+# residu via `_smooth_envelope_notches`.
+# --------------------------------------------------------------------- #
+
+
+def _disc_with_two_offset_blobs_mask() -> np.ndarray:
+    """Reproduit en miniature la structure exacte du defaut Cherry Moon :
+    un disque principal + un petit element d'encre TOUT PRES du bord (se
+    soude avec une jonction large, sans encoche) + un second element un peu
+    plus loin, juste a la limite du rayon de fermeture necessaire pour
+    unifier le dessin (se soude avec une jonction etroite -- l'encoche).
+    Grand canevas (800px) pour que l'aire des deux petits elements reste
+    tres inferieure a 1% de l'aire totale, comme dans le cas reel (le
+    detail radial de l'anneau decoratif est minuscule face au disque
+    entier)."""
+    mask = np.zeros((800, 800), dtype=np.uint8)
+    cv2.circle(mask, (400, 400), 300, 255, thickness=6)
+    cv2.circle(mask, (103, 400), 8, 255, thickness=-1)  # gap ~2px : jonction large
+    cv2.circle(mask, (68, 435), 8, 255, thickness=-1)  # gap ~15px : jonction etroite -> encoche
+    return mask > 0
+
+
+def test_local_bridging_notch_is_filled_after_global_closing():
+    """Cas Cherry Moon reproduit en miniature (voir `_disc_with_two_offset_
+    blobs_mask`) : AVANT la correction (fermeture + fill-from-border seuls,
+    sans `_smooth_envelope_notches`), la zone entre les deux petits elements
+    reste une encoche concave (fond, pas matiere) meme si le masque global
+    est deja une seule composante connexe. Verifie a la fois que le defaut
+    est bien reproductible dans ce cas synthetique (avant correction) ET que
+    `compute_envelope_mask` (avec la correction) le comble."""
+    ink_mask = _disc_with_two_offset_blobs_mask()
+
+    from lithoshape3d.core.geometry.artwork_shape_extractor import (
+        _default_max_closing_radius_px,
+    )
+
+    max_radius = _default_max_closing_radius_px(ink_mask.shape)
+    radius, working = _search_min_closing_radius(ink_mask, max_radius)
+    envelope_before_smoothing = _fill_enclosed_regions(working)
+
+    # Pixels au coeur de l'encoche (entre les deux petits elements, hors du
+    # disque) : encore fond (False) juste apres fermeture + fill-from-border,
+    # sans la passe de lissage -- confirme que le defaut est bien reproduit.
+    notch_points = [(85, 418), (80, 420), (90, 415)]
+    assert all(not envelope_before_smoothing[y, x] for x, y in notch_points), (
+        "Le cas synthetique ne reproduit pas l'encoche attendue avant "
+        "correction -- ajuster les coordonnees/rayons de test."
+    )
+
+    envelope, radius_used, num_before, num_after = compute_envelope_mask(ink_mask)
+    assert num_after == 1
+
+    # Apres correction (`_smooth_envelope_notches` applique par
+    # `compute_envelope_mask`) : l'encoche est comblee, ces pixels sont
+    # devenus matiere.
+    assert all(envelope[y, x] for x, y in notch_points), (
+        "L'encoche locale n'a pas ete comblee par compute_envelope_mask -- "
+        "regression du fix de l'encoche Cherry Moon."
+    )
+
+    # La correction ne doit ajouter qu'une petite quantite de matiere (les
+    # defauts locaux sont petits par construction) -- pas de gonflement
+    # global du contour.
+    added_ratio = (envelope.sum() - envelope_before_smoothing.sum()) / envelope.sum()
+    assert added_ratio < 0.02
+
+
+def test_large_real_gap_is_not_erased_by_notch_smoothing():
+    """Garde-fou contre une regression inverse : `_smooth_envelope_notches`
+    ne doit JAMAIS combler une vraie caracteristique du dessin (ex. une
+    grande ouverture volontaire, du meme ordre de grandeur que l'enveloppe
+    elle-meme) -- seulement les petits defauts de jonction. Ici, un anneau
+    largement ouvert (forme de "C") : l'ouverture doit rester une ouverture
+    apres extraction complete."""
+    image = Image.new("L", (300, 300), 255)
+    draw = ImageDraw.Draw(image)
+    # Anneau "C" : ouverture large (~60 degres) sur le cote droit.
+    draw.arc([50, 50, 250, 250], start=40, end=320, fill=0, width=14)
+    gray = _gray_from_image(image)
+
+    result = extract_artwork_from_arrays(gray, width_mm=60.0)
+
+    # L'enveloppe doit rester nettement plus petite qu'un disque plein
+    # (l'ouverture du "C" -- une vraie concavite -- n'a pas ete comblee).
+    from shapely.geometry import Point
+
+    full_disc_area = Point(150 * 60.0 / 300, 150 * 60.0 / 300).buffer(100 * 60.0 / 300).area
+    assert result.envelope_polygon.area < 0.85 * full_disc_area
 
 
 # --------------------------------------------------------------------- #

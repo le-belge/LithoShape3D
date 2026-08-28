@@ -77,6 +77,22 @@ _MIN_MAX_CLOSING_RADIUS_PX = 8
 travail (mask_resolution_px reduit) ou la fraction ci-dessus donnerait un
 plafond derisoire (< quelques pixels)."""
 
+_NOTCH_SMOOTHING_MAX_AREA_RATIO = 0.01
+"""Seuil (1% de l'aire totale de l'enveloppe) utilise par
+`_smooth_envelope_notches` pour distinguer une VRAIE encoche -- artefact
+d'un pont de fermeture morphologique trop juste entre deux elements
+disjoints qui restent localement mal soudes meme si le masque global est
+devenu une seule composante connexe -- d'une vraie caracteristique du
+dessin (ex. l'ouverture d'un croissant de lune, l'interieur d'un "C").
+`_search_min_closing_radius` ne garantit que la CONNEXITE GLOBALE au plus
+petit rayon possible ; elle ne garantit PAS que CHAQUE paire d'elements
+proches soit individuellement bien soudee -- un pont local peut rester
+etroit/concave a un endroit precis du contour meme quand le masque entier
+est deja une seule composante (le chemin de connexite passe ailleurs).
+Une caracteristique reelle du dessin (bien plus grande, generalement du
+meme ordre de grandeur que l'enveloppe elle-meme) reste tres au-dessus de
+ce seuil et n'est donc jamais comblee par erreur."""
+
 
 class ArtworkExtractionError(ImageShapeExtractionError):
     """Erreur specifique a l'extraction artwork -- sous-classe de
@@ -183,6 +199,59 @@ def _search_min_closing_radius(ink_mask: np.ndarray, max_radius_px: int) -> tupl
     return best_radius, best_mask
 
 
+def _smooth_envelope_notches(
+    envelope_mask: np.ndarray,
+    radius_px: int,
+    area_ratio_threshold: float = _NOTCH_SMOOTHING_MAX_AREA_RATIO,
+) -> np.ndarray:
+    """Comble les encoches locales laissees par une fermeture morphologique
+    qui a suffi a unifier le dessin en une seule composante connexe GLOBALE
+    (voir `_search_min_closing_radius`) mais sans souder localement CHAQUE
+    paire d'elements proches -- ex. deux traits fins d'un anneau decoratif
+    separes par un ecart legerement superieur au rayon de fermeture utilise,
+    alors qu'une autre paire d'elements ailleurs a suffi a rendre le masque
+    global connexe. Le resultat est topologiquement correct (une seule
+    composante, mesh watertight) mais geometriquement defectueux : une
+    concavite en forme de "V" ou de marche, anormale, dans un contour censu
+    etre lisse a cet endroit.
+
+    Applique une fermeture morphologique supplementaire sur l'ENVELOPPE
+    elle-meme (pas sur l'encre) au rayon `radius_px` (le plafond de
+    recherche deja calcule -- volontairement plus grand que le rayon minimal
+    qui a suffi a unifier le masque, car unifier localement CETTE encoche
+    precise peut demander plus que le minimum global), puis ne CONSERVE que
+    les pixels ajoutes dont la composante connexe est petite (< `area_ratio_
+    threshold` de l'aire totale) -- une vraie caracteristique du dessin
+    (ouverture, echancrure volontaire) est bien plus grande et n'est donc
+    jamais affectee. Ne s'applique qu'aux pixels AJOUTES par la fermeture
+    supplementaire (jamais retires) : ne peut donc jamais faire disparaitre
+    de matiere existante ni introduire de nouveau trou."""
+    if radius_px <= 0 or not envelope_mask.any():
+        return envelope_mask
+
+    total_area = float(envelope_mask.sum())
+    if total_area <= 0:
+        return envelope_mask
+
+    closed = _apply_closing(envelope_mask, radius_px)
+    added = closed & ~envelope_mask
+    if not added.any():
+        return envelope_mask
+
+    labeled, num_labels = ndimage.label(added)
+    if num_labels == 0:
+        return envelope_mask
+
+    areas = ndimage.sum(added, labeled, index=range(1, num_labels + 1))
+    max_area = area_ratio_threshold * total_area
+    keep_labels = [i + 1 for i, area in enumerate(areas) if area <= max_area]
+    if not keep_labels:
+        return envelope_mask
+
+    fill_mask = np.isin(labeled, keep_labels)
+    return envelope_mask | fill_mask
+
+
 def compute_envelope_mask(
     ink_mask: np.ndarray,
     *,
@@ -216,6 +285,12 @@ def compute_envelope_mask(
                 "composantes restantes) -- augmentez le rayon."
             )
         envelope = _fill_enclosed_regions(working)
+        max_radius = (
+            max_closing_radius_px
+            if max_closing_radius_px is not None
+            else _default_max_closing_radius_px(ink_mask.shape)
+        )
+        envelope = _smooth_envelope_notches(envelope, max(closing_radius_px, max_radius))
         return envelope, closing_radius_px, num_components_before, num_components_after
 
     if num_components_before <= 1:
@@ -230,6 +305,12 @@ def compute_envelope_mask(
     radius, working = _search_min_closing_radius(ink_mask, max_radius)
     envelope = _fill_enclosed_regions(working)
     num_components_after = count_connected_components(working)
+    # `radius` est le plus PETIT rayon qui unifie le masque en une seule
+    # composante GLOBALE -- pas garanti de souder localement chaque paire
+    # d'elements proches (voir docstring de `_smooth_envelope_notches`).
+    # On reutilise `max_radius` (le plafond de recherche, deja calcule) pour
+    # la passe de lissage, volontairement plus genereux que `radius`.
+    envelope = _smooth_envelope_notches(envelope, max_radius)
     return envelope, radius, num_components_before, num_components_after
 
 
