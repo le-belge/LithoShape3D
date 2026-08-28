@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from lithoshape3d.core.geometry.image_lightbox_export import LightboxImageResult
 from lithoshape3d.core.scene.models import ImageTransform
+from lithoshape3d.ui.mesh_preview_panel import MeshPreviewPanel
 
 logger = logging.getLogger("lithoshape3d.ui.lightbox_image")
 
@@ -88,7 +89,7 @@ class LightboxImageDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("LightBox depuis image")
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(900)
 
         self._image_path: str | None = None
         """Chemin ORIGINAL choisi par l'utilisateur (affiche, et utilise
@@ -200,6 +201,11 @@ class LightboxImageDialog(QDialog):
 
         content_row.addWidget(form_widget, 1)
         layout.addLayout(content_row)
+
+        layout.addWidget(QLabel("Apercu 3D du resultat genere :"))
+        self.preview_3d = MeshPreviewPanel()
+        self.preview_3d.setMinimumHeight(280)
+        layout.addWidget(self.preview_3d, 1)
 
         self.generate_button = QPushButton("Generer")
         self.generate_button.clicked.connect(self._on_generate_clicked)
@@ -461,6 +467,7 @@ class LightboxImageDialog(QDialog):
             lines.append("")
             lines.append(f"OK -- {len(result.written)} fichier(s) genere(s) :")
             lines.extend(str(path) for path in result.written)
+            self.preview_3d.show_stl_files(result.written)
 
         self.result_view.setPlainText("\n".join(lines))
 

@@ -45,6 +45,7 @@ from lithoshape3d.core.geometry.lightbox_letters_export import (
 )
 from lithoshape3d.core.scene.models import ImageTransform
 from lithoshape3d.ui.fonts import discover_bold_fonts
+from lithoshape3d.ui.mesh_preview_panel import MeshPreviewPanel
 
 logger = logging.getLogger("lithoshape3d.ui.lightbox_letters")
 
@@ -87,6 +88,7 @@ class LightboxLettersDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("LightBox Letters")
         self.setMinimumWidth(560)
+        self.setMinimumHeight(760)
 
         self._font_path: str = ""
         self._output_dir: str = ""
@@ -168,6 +170,16 @@ class LightboxLettersDialog(QDialog):
         self.result_view.setPlaceholderText("Le resultat de la generation s'affichera ici.")
         self.result_view.setMinimumHeight(140)
         layout.addWidget(self.result_view)
+
+        layout.addWidget(
+            QLabel(
+                "Apercu 3D (toutes les lettres generees combinees en une seule scene "
+                "-- rendu visuel uniquement, pas une fusion booleenne du modele) :"
+            )
+        )
+        self.preview_3d = MeshPreviewPanel()
+        self.preview_3d.setMinimumHeight(260)
+        layout.addWidget(self.preview_3d, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -384,6 +396,7 @@ class LightboxLettersDialog(QDialog):
             lines.append("")
             lines.append(f"OK -- {len(result.written)} fichier(s) genere(s) :")
             lines.extend(str(path) for path in result.written)
+            self.preview_3d.show_stl_files(result.written)
 
         self.result_view.setPlainText("\n".join(lines))
 
