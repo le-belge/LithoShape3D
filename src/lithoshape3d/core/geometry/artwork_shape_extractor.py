@@ -415,6 +415,7 @@ def extract_artwork_from_arrays(
     min_component_area_ratio: float = _DEFAULT_INK_MIN_COMPONENT_AREA_RATIO,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
+    force_convex_envelope: bool = False,
 ) -> ArtworkExtractionResult:
     """Coeur du pipeline d'extraction artwork, a partir d'un tableau
     niveaux de gris DEJA CHARGE (pas de lecture disque) -- meme separation
@@ -425,7 +426,28 @@ def extract_artwork_from_arrays(
     Un dessin au trait n'a, par definition, pas de canal alpha exploitable
     (voir docstring de module) : contrairement au pipeline silhouette, il
     n'y a qu'un seul chemin -- seuillage Cas B (`threshold_and_clean_mask`,
-    REUTILISE, pas duplique) -- suivi du calcul enveloppe."""
+    REUTILISE, pas duplique) -- suivi du calcul enveloppe.
+
+    `force_convex_envelope` (False par defaut) : remplace le contour
+    d'enveloppe par son CERCLE ENGLOBANT MINIMAL (`shapely.
+    minimum_bounding_circle`) -- option demandee explicitement par
+    l'utilisateur pour un dessin conceptuellement circulaire (logo
+    "Cherry Moon") dont le contour reel, calcule fidelement depuis
+    l'encre du dessin (texte en arc, ligne de separation du "moon",
+    tirets decoratifs), presente des meplats locaux la ou ces elements
+    n'atteignent pas exactement un cercle parfait -- un lissage de
+    notch/Chaikin plus agressif ne peut PAS corriger ca (ce ne sont pas
+    des artefacts de fermeture morphologique mais de vraies
+    caracteristiques du dessin source). Le simple CONVEX HULL a ete
+    essaye en premier et rejete : sur un nuage de points extremes epars
+    (quelques sommets de lettres, pas une vraie densite circulaire), le
+    hull reste un polygone anguleux (quadrilatere/losange arrondi par
+    Chaikin, pas un cercle) -- `minimum_bounding_circle` donne le VRAI
+    plus petit cercle contenant l'enveloppe, quelle que soit la
+    repartition des points. NE PAS activer par defaut : un dessin
+    volontairement concave/non circulaire (ex. "Thunderdome", poings
+    ecartes du cercle central) serait completement denature (rempli par
+    le disque englobant)."""
     if width_mm <= 0:
         raise ValueError("width_mm doit etre > 0.")
 
@@ -461,6 +483,16 @@ def extract_artwork_from_arrays(
         envelope_mask, width_mm, simplify_tolerance_ratio=_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO
     )
     warnings.extend(envelope_class_warnings)
+    if force_convex_envelope and envelope_polygon.is_valid and not envelope_polygon.is_empty:
+        import shapely
+
+        circle = shapely.minimum_bounding_circle(envelope_polygon)
+        if circle.geom_type == "Polygon" and circle.is_valid and not circle.is_empty:
+            envelope_polygon = circle
+            warnings.append(
+                "Enveloppe forcee au cercle englobant minimal (option activee) : le contour "
+                "ignore les meplats locaux du dessin source pour rester un cercle parfait."
+            )
     if envelope_polygon.is_valid and not envelope_polygon.is_empty:
         smoothed = _smooth_polygon_corners(envelope_polygon, _ENVELOPE_CHAIKIN_ITERATIONS)
         if smoothed.is_valid and not smoothed.is_empty:
@@ -495,6 +527,7 @@ def extract_artwork_from_image(
     min_component_area_ratio: float = _DEFAULT_INK_MIN_COMPONENT_AREA_RATIO,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
+    force_convex_envelope: bool = False,
 ) -> ArtworkExtractionResult:
     """Point d'entree haut niveau : charge `image_path` (niveaux de gris
     uniquement -- un dessin au trait n'a pas de canal alpha exploitable, le
@@ -511,4 +544,5 @@ def extract_artwork_from_image(
         min_component_area_ratio=min_component_area_ratio,
         closing_radius_px=closing_radius_px,
         max_closing_radius_px=max_closing_radius_px,
+        force_convex_envelope=force_convex_envelope,
     )

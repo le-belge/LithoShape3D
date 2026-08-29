@@ -24,6 +24,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -171,6 +172,16 @@ class LightboxImageDialog(QDialog):
         )
         self.shape_mode_combo.currentIndexChanged.connect(self._on_shape_mode_changed)
         form.addRow("Mode de forme", self.shape_mode_combo)
+
+        self.force_convex_checkbox = QCheckBox("Forcer un cercle parfait (ignore les meplats du dessin)")
+        self.force_convex_checkbox.setToolTip(
+            "Remplace le contour par son cercle englobant minimal -- pour un logo "
+            "conceptuellement circulaire dont le trace reel n'atteint pas exactement un "
+            "cercle parfait (ex. Cherry Moon). NE PAS activer sur un dessin volontairement "
+            "non circulaire (ex. Thunderdome) -- la forme serait remplacee par un disque plein."
+        )
+        self.force_convex_checkbox.stateChanged.connect(lambda _checked: self._refresh_preview())
+        form.addRow("", self.force_convex_checkbox)
 
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(5.0, 1000.0)
@@ -377,6 +388,9 @@ class LightboxImageDialog(QDialog):
     def _on_shape_mode_changed(self, _index: int) -> None:
         is_artwork = self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK
         self.artwork_info_label.setVisible(is_artwork)
+        self.force_convex_checkbox.setVisible(is_artwork)
+        if not is_artwork:
+            self.force_convex_checkbox.setChecked(False)
         if self._gray is not None:
             self.threshold_row_widget.setVisible(self._threshold_relevant())
         if not is_artwork and self.cap_mode_combo.currentData() == _CAP_MODE_FLAT_TWO_COLOR:
@@ -623,6 +637,7 @@ class LightboxImageDialog(QDialog):
             cap_image_transform=cap_transform,
             shape_mode=shape_mode,
             cap_mode=cap_mode,
+            force_convex_envelope=self.force_convex_checkbox.isChecked(),
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)

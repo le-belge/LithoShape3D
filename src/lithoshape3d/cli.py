@@ -146,6 +146,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     image_box.add_argument(
+        "--force-convex-envelope",
+        action="store_true",
+        help=(
+            "artwork-envelope uniquement : remplace le contour par son cercle englobant "
+            "minimal (ignore les meplats locaux du dessin -- utile pour un logo "
+            "conceptuellement circulaire dont le trace reel n'atteint pas exactement un "
+            "cercle parfait, ex. Cherry Moon). NE PAS utiliser sur un dessin volontairement "
+            "non circulaire (ex. Thunderdome)."
+        ),
+    )
+    image_box.add_argument(
         "--cap-mode",
         default=None,
         choices=["flat", "lithophane", "flat-two-color"],
@@ -401,6 +412,7 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
         "cap_mode": cap_mode,
         "closing_radius_px": args.closing_radius_px,
         "max_closing_radius_px": args.max_closing_radius_px,
+        "force_convex_envelope": args.force_convex_envelope,
     }
     if args.cap_thickness_mm is not None:
         kwargs["cap_thickness_mm"] = args.cap_thickness_mm

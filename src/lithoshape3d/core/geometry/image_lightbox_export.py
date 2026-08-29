@@ -145,6 +145,7 @@ def generate_lightbox_from_image(
     cap_mode: str | None = None,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
+    force_convex_envelope: bool = False,
 ) -> LightboxImageResult:
     """Genere un caisson lumineux vectoriel depuis une image (corps + fond +
     capot + DXF).
@@ -312,6 +313,7 @@ def generate_lightbox_from_image(
                 threshold_value=threshold_value,
                 closing_radius_px=closing_radius_px,
                 max_closing_radius_px=max_closing_radius_px,
+                force_convex_envelope=force_convex_envelope,
                 **artwork_kwargs,
             )
         except (ArtworkExtractionError, ValueError, OSError) as exc:
