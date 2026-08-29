@@ -44,57 +44,6 @@ mecaniquement un capot fin sans dependre d'une tolerance d'impression trop
 serree, assez peu pour ne pas fragiliser une paroi deja fine
 (wall_thickness_mm typique 1.6-2mm)."""
 
-_TRIANGULATION_MAX_EDGE_RATIO = 0.12
-"""Fraction de la plus grande dimension XY du contour source utilisee comme
-longueur d'arete maximale cible pour la re-triangulation post-hoc (voir
-`_refine_triangulation`). Choisie apres verification visuelle sur le cas
-Cherry Moon (~90mm de large -> ~10.8mm d'arete max, ~9x plus de faces que la
-triangulation brute mais fini watertight et sans triangles longs visibles en
-eventail -- voir
-`examples/physical_validation/cherry_moon_source/qualite_corps_apres_fix.png`)."""
-
-_TRIANGULATION_MIN_MAX_EDGE_MM = 1.5
-"""Plancher absolu (petites formes, ex. lettres etroites) : en dessous, la
-subdivision exploserait le nombre de faces sans benefice visuel reel."""
-
-_TRIANGULATION_MAX_MAX_EDGE_MM = 12.0
-"""Plafond absolu (tres grandes formes) : au-dela, le gain visuel marginal
-ne justifie plus le cout en nombre de faces."""
-
-
-def _max_subdivision_edge_mm(outer) -> float:
-    minx, miny, maxx, maxy = outer.bounds
-    span = max(maxx - minx, maxy - miny)
-    target = span * _TRIANGULATION_MAX_EDGE_RATIO
-    return min(max(target, _TRIANGULATION_MIN_MAX_EDGE_MM), _TRIANGULATION_MAX_MAX_EDGE_MM)
-
-
-def _refine_triangulation(mesh, max_edge_mm: float):
-    """Re-triangulation post-hoc par subdivision d'aretes longues
-    (`trimesh.remesh.subdivide_to_size`), pour corriger la triangulation en
-    "eventail" (triangles tres allonges partant d'un seul sommet) produite
-    par `trimesh.creation.extrude_polygon` (moteur `manifold3d`, seul
-    disponible dans cet environnement -- ni `triangle` ni `mapbox_earcut` qui
-    permettraient une contrainte d'aire/angle de triangulation directe ne
-    sont installes ; ajouter cette dependance n'a pas ete fait ici). Bisection
-    recursive d'aretes -- ne modifie ni le contour ni le volume (a la
-    precision de subdivision pres), seulement la densite/repartition des
-    faces : un mesh watertight reste watertight apres coup.
-
-    Cette approche ATTENUE le probleme (triangles nettement plus courts et
-    reguliers, plus de long eventail visible) sans le resoudre au sens strict
-    d'une triangulation Delaunay/qualite optimale -- limitation documentee
-    dans le rapport de tache correspondant."""
-    import trimesh
-
-    if mesh is None or max_edge_mm <= 0:
-        return mesh
-    vertices, faces = trimesh.remesh.subdivide_to_size(
-        mesh.vertices, mesh.faces, max_edge=max_edge_mm
-    )
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
-
-
 ASSEMBLY_CLEARANCE_MM = 0.15
 """Jeu d'assemblage FDM (rayon, donc par cote) entre le capot et
 l'ouverture de l'epaulement : valeur usuelle pour une impression FDM
@@ -226,10 +175,8 @@ def build_vector_lightbox_body_mesh(
             "corps plein (aucune cavite) sur la majeure partie de sa hauteur."
         )
 
-    max_edge_mm = _max_subdivision_edge_mm(outer)
-
     if not cavity_meshes:
-        return _refine_triangulation(outer_mesh, max_edge_mm), warnings
+        return outer_mesh, warnings
 
     merged_cavity = _to_manifold(cavity_meshes[0])
     for mesh in cavity_meshes[1:]:
@@ -237,7 +184,6 @@ def build_vector_lightbox_body_mesh(
     body_mesh = _from_manifold(_to_manifold(outer_mesh) - merged_cavity)
     if body_mesh.is_empty:
         raise ValueError("Caisson impossible : la cavite supprime tout le volume de la forme.")
-    body_mesh = _refine_triangulation(body_mesh, max_edge_mm)
     return body_mesh, warnings
 
 
@@ -252,7 +198,7 @@ def build_vector_lightbox_back_panel_mesh(
     mesh = _extrude_geom(outer, thickness_mm, 0.0)
     if mesh is None:
         raise ValueError("Contour vide ou degenere : panneau impossible.")
-    return _refine_triangulation(mesh, _max_subdivision_edge_mm(outer))
+    return mesh
 
 
 def vector_lightbox_cap_footprint(
