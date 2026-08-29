@@ -350,11 +350,18 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
     )
 
     image_path = args.image
-    if str(image_path).lower().endswith(".svg"):
+    shape_mode = args.shape_mode.replace("-", "_")
+    if str(image_path).lower().endswith(".svg") and shape_mode == "artwork_envelope":
         # SVG -> PNG rasterise (Qt, via QtSvg) : responsabilite de cette
         # couche CLI, pas de core/ (qui ne doit jamais dependre de Qt, cf.
         # test_architecture_boundaries.py) -- meme mecanisme que le Shape
-        # Composer pour un SVG importe (ui/shape_svg_import.py).
+        # Composer pour un SVG importe (ui/shape_svg_import.py). Uniquement
+        # necessaire en mode "artwork_envelope" : ce mode repose sur des
+        # operations morphologiques raster sans equivalent vectoriel direct
+        # (voir docstring de `generate_lightbox_from_image`). En mode
+        # "silhouette" (par defaut), le `.svg` est passe TEL QUEL --
+        # `generate_lightbox_from_image` utilise alors le contour vectoriel
+        # exact (`core/geometry/svg_path_extractor.py`), sans rasterisation.
         from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
 
         image_path = rasterize_svg_to_alpha_png(str(image_path))
@@ -375,7 +382,6 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
 
     cap_transform = _parse_transform(args.cap_transform) if args.cap_transform else None
 
-    shape_mode = args.shape_mode.replace("-", "_")
     cap_mode = args.cap_mode.replace("-", "_") if args.cap_mode else None
 
     kwargs = {

@@ -147,18 +147,36 @@ def generate_lightbox_from_image(
     max_closing_radius_px: int | None = None,
 ) -> LightboxImageResult:
     """Genere un caisson lumineux vectoriel depuis une image (corps + fond +
-    capot + DXF). `image_path` doit deja etre un raster PNG/JPG (la
-    conversion SVG -> PNG, via Qt, est la responsabilite de l'appelant --
-    voir `ui/shape_svg_import.py` -- `core/` ne depend jamais de Qt).
+    capot + DXF).
+
+    `image_path` peut etre soit un raster PNG/JPG, soit -- en `shape_mode=
+    "silhouette"` uniquement -- un fichier `.svg` source, auquel cas le
+    contour vectoriel EXACT (courbes de Bezier tessellees adaptativement,
+    voir `svg_path_extractor.py`) est utilise directement, SANS rasterisation
+    prealable : la rasterisation via QtSvg (`ui/shape_svg_import.py`)
+    perdait les vraies courbes du SVG des la premiere etape, quelle que soit
+    la qualite de la simplification/lissage appliquee ensuite sur le contour
+    pixel resultant. `svg_path_extractor.py` est pur `core/` (lxml +
+    svgpathtools, aucun Qt), donc ce branchement ne viole pas la contrainte
+    architecturale `core/` -> jamais Qt.
+
+    En `shape_mode="artwork_envelope"`, un `.svg` doit TOUJOURS etre
+    rasterise par l'appelant avant l'appel (comme avant) : ce mode repose
+    sur des operations morphologiques raster (fermeture, fill-from-border,
+    voir `artwork_shape_extractor.py`) qui n'ont pas d'equivalent vectoriel
+    direct dans ce pipeline -- limitation documentee, pas un branchement
+    fragile force.
 
     `shape_mode` :
-      - `"silhouette"` (par defaut, inchange) : contour = silhouette
-        extraite par `image_shape_extractor.extract_shape_from_image`
-        (Cas A alpha ou Cas B seuillage photo).
+      - `"silhouette"` (par defaut, inchange pour les rasters) : contour =
+        silhouette extraite par `image_shape_extractor.extract_shape_from_image`
+        (Cas A alpha ou Cas B seuillage photo) pour un raster, ou par
+        `svg_path_extractor.extract_polygon_from_svg` pour un `.svg`.
       - `"artwork_envelope"` : contour = enveloppe unifiee d'un dessin au
         trait (`artwork_shape_extractor.extract_artwork_from_image`) -- un
         seul caisson meme si le dessin source a des elements disjoints
-        (ex. poings qui ne touchent pas un cercle).
+        (ex. poings qui ne touchent pas un cercle). Source toujours raster
+        (voir note ci-dessus).
 
     `cap_mode` (`None` = comportement historique : lithophanie si
     `cap_image_path` fourni, sinon plat) :
@@ -240,25 +258,43 @@ def generate_lightbox_from_image(
 
     ink_polygon = None
     if shape_mode == SHAPE_MODE_SILHOUETTE:
-        try:
-            silhouette_kwargs = {}
-            if min_component_area_ratio is not None:
-                silhouette_kwargs["min_component_area_ratio"] = min_component_area_ratio
-            shape = extract_shape_from_image(
-                image_path,
-                width_mm,
-                threshold_mode=threshold_mode,
-                threshold_value=threshold_value,
-                **silhouette_kwargs,
+        if str(image_path).lower().endswith(".svg"):
+            # Chemin vectoriel direct (pas de rasterisation) : voir
+            # docstring de fonction et `svg_path_extractor.py`.
+            from lithoshape3d.core.geometry.svg_path_extractor import (
+                SvgPathExtractionError,
+                extract_svg_polygon_result,
             )
-        except (ImageShapeExtractionError, ValueError, OSError) as exc:
-            result.messages.append(("error", f"extraction de la silhouette : {exc}"))
-            return result
-        result.threshold_used = shape.threshold_used
-        for warning in shape.warnings:
-            result.messages.append(("warning", warning))
-        outer = shape.polygon
-        shape_width_mm, shape_height_mm = shape.width_mm, shape.height_mm
+
+            try:
+                svg_result = extract_svg_polygon_result(image_path, width_mm)
+            except (SvgPathExtractionError, ValueError, OSError) as exc:
+                result.messages.append(("error", f"extraction vectorielle SVG : {exc}"))
+                return result
+            for warning in svg_result.warnings:
+                result.messages.append(("warning", warning))
+            outer = svg_result.polygon
+            shape_width_mm, shape_height_mm = svg_result.width_mm, svg_result.height_mm
+        else:
+            try:
+                silhouette_kwargs = {}
+                if min_component_area_ratio is not None:
+                    silhouette_kwargs["min_component_area_ratio"] = min_component_area_ratio
+                shape = extract_shape_from_image(
+                    image_path,
+                    width_mm,
+                    threshold_mode=threshold_mode,
+                    threshold_value=threshold_value,
+                    **silhouette_kwargs,
+                )
+            except (ImageShapeExtractionError, ValueError, OSError) as exc:
+                result.messages.append(("error", f"extraction de la silhouette : {exc}"))
+                return result
+            result.threshold_used = shape.threshold_used
+            for warning in shape.warnings:
+                result.messages.append(("warning", warning))
+            outer = shape.polygon
+            shape_width_mm, shape_height_mm = shape.width_mm, shape.height_mm
     else:
         from lithoshape3d.core.geometry.artwork_shape_extractor import (
             ArtworkExtractionError,

@@ -106,9 +106,19 @@ class LightboxImageDialog(QDialog):
         """Chemin ORIGINAL choisi par l'utilisateur (affiche, et utilise
         pour nommer les fichiers de sortie)."""
         self._resolved_image_path: str | None = None
-        """Chemin reellement passe au pipeline core -- un raster PNG/JPG,
-        identique a `_image_path` sauf pour un SVG (converti une fois via
-        `ui/shape_svg_import.py`, Qt, hors de `core/`)."""
+        """Chemin RASTER utilise pour la previsualisation 2D et le slider de
+        seuil (Cas B) -- identique a `_image_path` sauf pour un SVG
+        (rasterise une fois via `ui/shape_svg_import.py`, Qt, hors de
+        `core/`, uniquement a des fins de previsualisation/seuillage)."""
+        self._svg_source_path: str | None = None
+        """Chemin du `.svg` ORIGINAL si la source est un SVG, sinon `None`.
+        En mode `shape_mode="silhouette"`, c'est ce chemin (PAS le raster
+        de previsualisation) qui est transmis a `generate_lightbox_from_image`
+        -- le pipeline core utilise alors le contour vectoriel exact
+        (`core/geometry/svg_path_extractor.py`), sans repasser par le
+        raster. En mode `"artwork_envelope"`, le raster reste utilise (ce
+        mode n'a pas d'equivalent vectoriel direct, voir docstring de
+        `generate_lightbox_from_image`)."""
         self._alpha: np.ndarray | None = None
         self._gray: np.ndarray | None = None
         self._output_dir: str = ""
@@ -282,10 +292,16 @@ class LightboxImageDialog(QDialog):
 
     def _load_image(self, path: str) -> None:
         resolved_path = path
+        svg_source_path: str | None = None
         if path.lower().endswith(".svg"):
+            svg_source_path = path
             try:
                 from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
 
+                # Uniquement pour la previsualisation 2D / le slider de
+                # seuil ci-dessous -- la generation reelle en mode
+                # silhouette utilisera `svg_source_path` (contour vectoriel
+                # exact), pas ce raster (voir `_on_generate_clicked`).
                 resolved_path = rasterize_svg_to_alpha_png(path)
             except Exception as exc:
                 QMessageBox.warning(self, "LightBox depuis image", f"SVG illisible : {exc}")
@@ -304,6 +320,7 @@ class LightboxImageDialog(QDialog):
 
         self._image_path = path
         self._resolved_image_path = resolved_path
+        self._svg_source_path = svg_source_path
         self._alpha = alpha
         self._gray = gray
         self.image_label.setText(Path(path).name)
@@ -579,12 +596,21 @@ class LightboxImageDialog(QDialog):
         threshold_mode, threshold_value = self._resolve_threshold_args()
         shape_mode = self.shape_mode_combo.currentData()
 
+        # Mode silhouette + source SVG : passe le SVG ORIGINAL (contour
+        # vectoriel exact via `core/geometry/svg_path_extractor.py`), pas le
+        # raster de previsualisation -- voir `_svg_source_path`.
+        generation_image_path = (
+            self._svg_source_path
+            if (shape_mode == _SHAPE_MODE_SILHOUETTE and self._svg_source_path)
+            else self._resolved_image_path
+        )
+
         self.generate_button.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.result_view.setPlainText("Generation en cours...")
 
         worker = _ImageLightboxWorker(
-            image_path=self._resolved_image_path,
+            image_path=generation_image_path,
             output_dir=self._output_dir,
             width_mm=self.width_spin.value(),
             depth_mm=self.depth_spin.value(),

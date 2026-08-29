@@ -9,7 +9,11 @@ import pytest
 import trimesh
 from PIL import Image, ImageDraw
 
+from pathlib import Path
+
 from lithoshape3d.core.geometry.image_lightbox_export import generate_lightbox_from_image
+
+_TESLA_SVG = Path(__file__).resolve().parents[2] / "fixtures" / "svg" / "Tesla_T_symbol.svg"
 
 
 def _save_alpha_logo(tmp_path, name: str = "logo.png"):
@@ -210,3 +214,30 @@ def test_generate_lightbox_from_image_with_lithophane_cap_reuses_heightfield_eng
     assert len(capot) == 1
     mesh = trimesh.load(capot[0])
     assert mesh.is_watertight
+
+
+@pytest.mark.skipif(not _TESLA_SVG.exists(), reason="fixture Tesla_T_symbol.svg absente")
+def test_generate_lightbox_from_svg_source_uses_direct_vector_path_not_raster(tmp_path):
+    """Regression du bug rapporte : un fichier `.svg` source en
+    `shape_mode="silhouette"` (par defaut) doit produire un corps ET un
+    capot watertight en passant directement par le contour vectoriel exact
+    (`svg_path_extractor.py`), SANS rasterisation prealable -- le chemin
+    `.svg` est transmis TEL QUEL a `generate_lightbox_from_image`, jamais
+    converti en PNG au prealable dans ce test."""
+    result = generate_lightbox_from_image(
+        _TESLA_SVG,
+        tmp_path / "out",
+        width_mm=100.0,
+        depth_mm=25.0,
+    )
+
+    assert not result.errors, result.errors
+    body_paths = [p for p in result.written if p.name.endswith("_corps.stl")]
+    cap_paths = [p for p in result.written if p.name.endswith("_capot.stl")]
+    assert len(body_paths) == 1
+    assert len(cap_paths) == 1
+
+    body_mesh = trimesh.load(body_paths[0])
+    cap_mesh = trimesh.load(cap_paths[0])
+    assert body_mesh.is_watertight
+    assert cap_mesh.is_watertight
