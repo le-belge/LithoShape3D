@@ -42,6 +42,23 @@ CAP_MODE_LITHOPHANE = "lithophane"
 CAP_MODE_FLAT_TWO_COLOR = "flat_two_color"
 _CAP_MODES = (CAP_MODE_FLAT, CAP_MODE_LITHOPHANE, CAP_MODE_FLAT_TWO_COLOR)
 
+MIN_CAP_PIECE_AREA_MM2 = 0.05
+"""Aire minimale (mm2, seuil ABSOLU -- independant de la taille du capot)
+d'un fragment issu de la decoupe booleenne 2 couleurs (`color_a`/`color_b`)
+pour etre conserve. Sert uniquement a ecarter les esquilles degenerees
+produites par la booleenne shapely (triangles quasi-nuls qui empechaient un
+mesh watertight, cas Thunderdome), PAS a filtrer des details reels du
+dessin. Choisi sous l'aire d'un disque de diametre ~0.25mm (bien en dessous
+de la largeur de trait imprimable la plus fine d'une buse standard
+0.4mm) : suffisant pour eliminer les esquilles numeriques sans jamais
+toucher un contre-poinçon de lettre (trou du "O", etc.) ou un empattement
+fin, qui font systematiquement plusieurs mm2 meme dans un logo a petite
+echelle. Un seuil PROPORTIONNEL a l'aire du capot (aire_capot * ratio) a ete
+essaye et rejete : il grandit avec la taille du dessin et finit par
+supprimer des details reels sur les grands caissons (cas verifie sur
+Cherry Moon -- deux contre-poinçons de lettres et deux empattements fins
+etaient rejetes a tort avec un seuil proportionnel a 0.02%)."""
+
 DEFAULT_CAP_THICKNESS_MM = 1.5
 """Epaisseur du capot plat/lisse par defaut (mode sans lithophanie) : reste
 dans l'epaisseur de l'epaulement (`SHOULDER_DEPTH_MM` = 1.75mm, voir
@@ -430,7 +447,7 @@ def generate_lightbox_from_image(
             # de la booleenne (contours d'encre tres detailles/nombreux --
             # cf. Thunderdome) : sans ce filtrage, `extrude_polygon` peut
             # produire des triangles quasi-nuls et un mesh non watertight.
-            min_piece_area_mm2 = max(cap_polygon.area * 0.0002, 0.01)
+            min_piece_area_mm2 = MIN_CAP_PIECE_AREA_MM2
             any_piece_written = False
             for label, piece_polygon in (("a", color_a_polygon), ("b", color_b_polygon)):
                 if isinstance(piece_polygon, GeometryCollection):

@@ -230,6 +230,56 @@ def test_cherry_moon_artwork_ink_polygon_matches_silhouette_polygon_exactly():
     assert artwork.ink_polygon.equals_exact(silhouette_polygon, tolerance=1e-9)
 
 
+@pytest.mark.skipif(not _CHERRY_MOON_SVG.exists(), reason="fixture cherry_moon.svg absente")
+def test_a_toggling_envelope_computation_leaves_ink_polygon_bit_identical():
+    """TEST A (exige explicitement) : le calcul de l'enveloppe (contour
+    exterieur physique, soude) ne doit produire AUCUNE difference sur la
+    geometrie d'encre (ArtworkGeometry). Verifie par les DEUX metriques
+    demandees : distance de Hausdorff ET aire de la difference symetrique
+    Shapely -- pas seulement "proche", mais ~0 exactement."""
+    from shapely.ops import unary_union
+
+    from lithoshape3d.core.geometry.svg_path_extractor import extract_svg_components_from_svg
+
+    artwork = extract_artwork_from_svg(str(_CHERRY_MOON_SVG), _WIDTH_MM)
+    ink_via_full_pipeline = artwork.ink_polygon
+
+    # "ink avant" : union directe des composantes brutes, SANS aucun calcul
+    # d'enveloppe/soudure (chemin de code totalement independant).
+    raw_components = extract_svg_components_from_svg(str(_CHERRY_MOON_SVG), _WIDTH_MM).polygons
+    ink_without_envelope = unary_union(raw_components)
+
+    hausdorff = ink_via_full_pipeline.hausdorff_distance(ink_without_envelope)
+    sym_diff_area = ink_via_full_pipeline.symmetric_difference(ink_without_envelope).area
+
+    assert hausdorff == pytest.approx(0.0, abs=1e-9)
+    assert sym_diff_area == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.skipif(not _CHERRY_MOON_SVG.exists(), reason="fixture cherry_moon.svg absente")
+def test_b_only_the_physical_exterior_contour_changes_between_ink_and_envelope():
+    """TEST B (exige explicitement) : seul le contour physique EXTERIEUR du
+    caisson doit changer entre `ink_polygon` (fidele) et `envelope_polygon`
+    (soude) -- pas la geometrie interieure. Verifie que l'enveloppe
+    CONTIENT integralement l'encre (aucune partie de l'encre n'est
+    deplacee/deformee vers l'exterieur de l'enveloppe) et que l'aire
+    ajoutee par la soudure est strictement positive (comportement attendu :
+    l'enveloppe comble les ecarts entre composantes disjointes)."""
+    artwork = extract_artwork_from_svg(str(_CHERRY_MOON_SVG), _WIDTH_MM)
+
+    ink_outside_envelope = artwork.ink_polygon.difference(artwork.envelope_polygon)
+    # Tolerance non-triviale (0.1mm2) mais toujours >3 ordres de grandeur
+    # sous l'aire totale de l'encre (~4759mm2) : le buffer +d/-d de la
+    # soudure laisse un bruit numerique negligeable (esquilles flottantes
+    # sub-pixel) le long du contour, sans rapport avec une perte reelle de
+    # detail (voir diagnostic complet, pipeline_debug/metrics.json).
+    assert ink_outside_envelope.area == pytest.approx(0.0, abs=0.1), (
+        "De l'encre existe hors de l'enveloppe -- l'enveloppe ne devrait qu'AJOUTER de la "
+        "matiere (soudure), jamais deplacer/perdre de l'encre existante."
+    )
+    assert artwork.envelope_polygon.area > artwork.ink_polygon.area
+
+
 def test_ring_artwork_envelope_does_not_fill_the_legitimate_hole():
     """Garde-fou explicite demande : la soudure vectorielle de
     `artwork_envelope` (buffer +d/-d) ne doit PAS combler un trou legitime

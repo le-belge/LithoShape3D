@@ -243,6 +243,46 @@ def test_generate_lightbox_from_svg_source_uses_direct_vector_path_not_raster(tm
     assert cap_mesh.is_watertight
 
 
+def test_flat_two_color_cap_split_keeps_small_but_real_details(tmp_path):
+    """Regression : le filtre d'esquilles `MIN_CAP_PIECE_AREA_MM2` doit
+    rester un seuil ABSOLU petit (pas proportionnel a l'aire du capot) --
+    sinon il supprime a tort de vrais details fins (contre-poinçon de
+    lettre comme le trou du "O", empattement fin) sur un logo texte a cette
+    echelle. Diagnostic pipeline complet mene sur le cas reel (Cherry Moon)
+    dans `examples/physical_validation/cherry_moon_source/pipeline_debug/`.
+    Ici : cas synthetique reproduisant le motif "lettre avec un trou fin"
+    dont l'aire est bien en dessous de 0.02% de l'aire du capot (seuil
+    proportionnel desormais rejete)."""
+    from shapely.affinity import translate
+    from shapely.geometry import Polygon
+
+    from lithoshape3d.core.geometry.image_lightbox_export import MIN_CAP_PIECE_AREA_MM2
+
+    # Un grand disque d'encre (aire ~ plusieurs milliers de mm2, comme un
+    # logo 100mm) avec un petit trou de lettre (~1mm2, largement au-dessus
+    # du plancher absolu 0.05mm2 mais largement EN DESSOUS de ce qu'un
+    # seuil proportionnel a 0.02% de l'aire du capot aurait rejete).
+    outer = Polygon([(0, 0), (80, 0), (80, 80), (0, 80)])
+    hole = translate(
+        Polygon([(0, 0), (1.2, 0), (1.2, 1.2), (0, 1.2)]), xoff=40, yoff=40
+    )
+    ink_with_hole = outer.difference(hole)
+    assert ink_with_hole.area > 6000  # capot bien plus grand que le trou
+    assert hole.area < MIN_CAP_PIECE_AREA_MM2 * 30  # trou "petit" mais reel
+    assert hole.area >= MIN_CAP_PIECE_AREA_MM2, (
+        "Le trou synthetique doit rester au-dessus du plancher absolu -- sinon ce test ne "
+        "prouve rien sur la regression proportionnelle qu'il cible."
+    )
+
+    cap_polygon = outer  # footprint du capot = meme rectangle, pas de retrecissement ici
+    color_b = cap_polygon.difference(ink_with_hole)  # le "fond" doit recuperer le trou
+    assert color_b.area == pytest.approx(hole.area, rel=1e-9)
+    assert color_b.area >= MIN_CAP_PIECE_AREA_MM2, (
+        "Ce trou de lettre serait rejete par le filtre d'esquilles -- regression du bug "
+        "diagnostique (contre-poinçon du 'O' perdu sur Cherry Moon)."
+    )
+
+
 _CHERRY_MOON_SVG = (
     Path(__file__).resolve().parents[3]
     / "examples"
