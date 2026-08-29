@@ -1,4 +1,4 @@
-"""Theme centralise de LithoShape3D : gris anthracite, accents sobres.
+"""Theme centralise de LithoShape3D : gris clair, accents sobres.
 
 Remplacable facilement : modifier les constantes de couleur ci-dessous (ou
 substituer entierement `STYLESHEET`) sans toucher au reste de l'UI. Les
@@ -8,16 +8,16 @@ par `objectName` plutot que par une logique dispersee dans main_window.py.
 
 from __future__ import annotations
 
-BACKGROUND = "#1e1f22"
-SURFACE = "#26272b"
-SURFACE_ALT = "#2e3034"
-BORDER = "#3a3c40"
-TEXT = "#e6e6e6"
-TEXT_MUTED = "#9a9da3"
-ACCENT = "#4fa3c7"
-ACCENT_HOVER = "#63b6d9"
-WARNING = "#d9a441"
-DISABLED_TEXT = "#5c5f66"
+BACKGROUND = "#f2f2f4"
+SURFACE = "#ffffff"
+SURFACE_ALT = "#e8e9ec"
+BORDER = "#c9cad0"
+TEXT = "#202124"
+TEXT_MUTED = "#5f6368"
+ACCENT = "#1a73a8"
+ACCENT_HOVER = "#2288c4"
+WARNING = "#b5790f"
+DISABLED_TEXT = "#a1a3a8"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{

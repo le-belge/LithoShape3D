@@ -61,7 +61,7 @@ class MeshPreviewPanel(QWidget):
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setWordWrap(True)
         self._status_label.setMinimumSize(_MIN_SIZE, _MIN_SIZE)
-        self._status_label.setStyleSheet("background-color: #2b2b2b; color: #ccc;")
+        self._status_label.setStyleSheet("background-color: #e8e9ec; color: #5f6368;")
         layout.addWidget(self._status_label, 1)
 
         try:

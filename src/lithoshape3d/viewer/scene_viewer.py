@@ -22,8 +22,8 @@ from matplotlib.colors import LinearSegmentedColormap
 
 from lithoshape3d.viewer.adapter import mesh_to_polydata
 
-BACKGROUND_COLOR = "#2b2b2b"
-MESH_COLOR = "#e0dccb"
+BACKGROUND_COLOR = "#d9dade"
+MESH_COLOR = "#8a8672"
 BACKLIGHT_BACKGROUND_COLOR = "#0a0a0c"
 BACKLIGHT_DARK_COLOR = "#0c0600"  # matiere epaisse : peu de lumiere transmise
 BACKLIGHT_BRIGHT_COLOR = "#fffaf0"  # matiere fine : lumiere transmise, "glow"
