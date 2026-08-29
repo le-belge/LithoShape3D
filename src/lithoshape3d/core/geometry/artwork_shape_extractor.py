@@ -58,11 +58,20 @@ fine que le Cas A (logo alpha propre, 0.004) et le Cas B photo (0.008) --
 le capot 2 couleurs doit rester fidele au trait, c'est tout l'interet de ce
 mode par rapport a une silhouette globale."""
 
-_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO = 0.006
-"""Tolerance de simplification de l'enveloppe (corps/fond du caisson) --
-volontairement plus genereuse que l'encre : l'enveloppe est deja une forme
-"lissee" par le fill-from-border et l'eventuelle fermeture morphologique,
-inutile de conserver son detail pixel-a-pixel pour l'extrusion du corps."""
+_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO = 0.002
+"""Tolerance de simplification de l'enveloppe (corps/fond du caisson).
+Abaissee de 0.006 a 0.002 (retour utilisateur "cercle a ~20 cotes, tres
+facete" -- une simplification par rapport au PERIMETRE, comme ici, retrecit
+tres vite le nombre de sommets d'un contour proche d'un cercle). 0.002 garde
+un contour nettement plus lisse (plusieurs dizaines de sommets sur un cercle
+de taille typique) sans repartir sur un nombre de sommets demesure -- valeur
+choisie apres verification visuelle sur le cas Cherry Moon (voir
+`examples/physical_validation/cherry_moon_source/qualite_corps_apres_fix.png`),
+pas seulement sur un comptage de sommets. Desormais plus fine que l'encre
+(`_INK_SIMPLIFY_TOLERANCE_RATIO` = 0.003) : l'enveloppe est le contour EXTRUDE
+du corps, c'est elle qui doit rester lisse a l'oeil sur une grande surface
+extrudee, alors que l'encre reste un motif plat 2D ou une legere facette est
+moins visible."""
 
 _DEFAULT_MAX_CLOSING_RADIUS_RATIO = 0.06
 """Plafond par defaut de recherche de rayon de fermeture, en fraction de la

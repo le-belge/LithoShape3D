@@ -102,10 +102,14 @@ def test_letter_body_mesh_volume_matches_shoulder_step_geometry():
     inner_shoulder = outer.buffer(-(wall_thickness_mm + SHOULDER_WIDTH_MM))
 
     shoulder_top = depth_mm - SHOULDER_DEPTH_MM
+    # Option B (rebord inverse, retour utilisateur) : cavite ETROITE
+    # (`inner_shoulder`) pres du fond (hauteur `shoulder_top`), cavite LARGE
+    # (`inner_lower`, meme largeur que le corps) pres de l'ouverture (hauteur
+    # `SHOULDER_DEPTH_MM`) -- voir `vector_lightbox.build_vector_lightbox_body_mesh`.
     expected_volume = (
         outer.area * depth_mm
-        - inner_lower.area * shoulder_top
-        - inner_shoulder.area * SHOULDER_DEPTH_MM
+        - inner_shoulder.area * shoulder_top
+        - inner_lower.area * SHOULDER_DEPTH_MM
     )
 
     assert body_mesh.volume == pytest.approx(expected_volume, rel=0.03)

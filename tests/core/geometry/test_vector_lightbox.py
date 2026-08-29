@@ -64,10 +64,16 @@ def test_body_mesh_volume_matches_shoulder_step_geometry_for_arbitrary_polygon()
     inner_lower = outer.buffer(-wall_thickness_mm)
     inner_shoulder = outer.buffer(-(wall_thickness_mm + SHOULDER_WIDTH_MM))
     shoulder_top = depth_mm - SHOULDER_DEPTH_MM
+    # Option B (rebord invere, retour utilisateur) : la cavite ETROITE
+    # (`inner_shoulder`, paroi elargie) occupe la portion PROFONDE pres du
+    # fond (hauteur `shoulder_top`) -- c'est le rebord qui soutient le capot
+    # par en dessous -- tandis que la cavite LARGE (`inner_lower`, meme
+    # largeur que le corps) occupe la portion pres de l'AVANT/OUVERTURE
+    # (hauteur `SHOULDER_DEPTH_MM`), ou le capot vient se loger.
     expected_volume = (
         outer.area * depth_mm
-        - inner_lower.area * shoulder_top
-        - inner_shoulder.area * SHOULDER_DEPTH_MM
+        - inner_shoulder.area * shoulder_top
+        - inner_lower.area * SHOULDER_DEPTH_MM
     )
     assert body_mesh.volume == pytest.approx(expected_volume, rel=0.03)
 
