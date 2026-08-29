@@ -86,8 +86,14 @@ _MIN_MAX_CLOSING_RADIUS_PX = 8
 travail (mask_resolution_px reduit) ou la fraction ci-dessus donnerait un
 plafond derisoire (< quelques pixels)."""
 
-_NOTCH_SMOOTHING_MAX_AREA_RATIO = 0.01
-"""Seuil (1% de l'aire totale de l'enveloppe) utilise par
+_NOTCH_SMOOTHING_MAX_AREA_RATIO = 0.03
+"""Seuil (3% de l'aire totale de l'enveloppe -- releve de 1% : mesure sur un
+cas reel, "Cherry Moon", la zone a combler pour une encoche legitime
+(jonction texte/anneau decoratif) faisait ~1.0-1.2% de l'aire totale, donc
+systematiquement rejetee par l'ancien seuil de 1% quel que soit le rayon de
+fermeture utilise -- verifie par mesure directe des composantes ajoutees.
+3% reste tres en dessous d'une vraie caracteristique du dessin, voir
+paragraphe suivant) utilise par
 `_smooth_envelope_notches` pour distinguer une VRAIE encoche -- artefact
 d'un pont de fermeture morphologique trop juste entre deux elements
 disjoints qui restent localement mal soudes meme si le masque global est
@@ -101,6 +107,25 @@ est deja une seule composante (le chemin de connexite passe ailleurs).
 Une caracteristique reelle du dessin (bien plus grande, generalement du
 meme ordre de grandeur que l'enveloppe elle-meme) reste tres au-dessus de
 ce seuil et n'est donc jamais comblee par erreur."""
+
+_NOTCH_SMOOTHING_RADIUS_MULTIPLIER = 4
+"""Le rayon de fermeture utilise pour le LISSAGE d'encoches est un multiple
+de `max_radius` (le plafond deja utilise pour la recherche d'UNIFICATION
+globale), pas `max_radius` lui-meme -- constate sur un cas reel (logo
+"Cherry Moon", jonction entre un texte et un anneau decoratif) qu'un rayon
+egal au plafond d'unification (24px) laissait une encoche nette et
+persistante, alors qu'un rayon 3-4x plus grand la comble entierement (verifie
+visuellement, `examples/physical_validation/cherry_moon_source/`). Sans
+danger d'effacer une vraie caracteristique du dessin malgre ce rayon plus
+genereux : le filtre par aire (`_NOTCH_SMOOTHING_MAX_AREA_RATIO`) reste la
+seule garde -- il s'applique independamment du rayon utilise pour la passe de
+fermeture supplementaire."""
+
+_NOTCH_SMOOTHING_MAX_RADIUS_PX = 400
+"""Plafond absolu sur le rayon de lissage (independant de la taille de
+l'image) : evite un cout de calcul demesure sur une tres grande image de
+travail ou `max_radius * _NOTCH_SMOOTHING_RADIUS_MULTIPLIER` deviendrait
+enorme."""
 
 
 class ArtworkExtractionError(ImageShapeExtractionError):
@@ -294,12 +319,11 @@ def compute_envelope_mask(
                 "composantes restantes) -- augmentez le rayon."
             )
         envelope = _fill_enclosed_regions(working)
-        max_radius = (
-            max_closing_radius_px
-            if max_closing_radius_px is not None
-            else _default_max_closing_radius_px(ink_mask.shape)
+        smoothing_radius = min(
+            closing_radius_px * _NOTCH_SMOOTHING_RADIUS_MULTIPLIER,
+            _NOTCH_SMOOTHING_MAX_RADIUS_PX,
         )
-        envelope = _smooth_envelope_notches(envelope, max(closing_radius_px, max_radius))
+        envelope = _smooth_envelope_notches(envelope, smoothing_radius)
         return envelope, closing_radius_px, num_components_before, num_components_after
 
     if num_components_before <= 1:
@@ -317,9 +341,16 @@ def compute_envelope_mask(
     # `radius` est le plus PETIT rayon qui unifie le masque en une seule
     # composante GLOBALE -- pas garanti de souder localement chaque paire
     # d'elements proches (voir docstring de `_smooth_envelope_notches`).
-    # On reutilise `max_radius` (le plafond de recherche, deja calcule) pour
-    # la passe de lissage, volontairement plus genereux que `radius`.
-    envelope = _smooth_envelope_notches(envelope, max_radius)
+    # La passe de lissage utilise un multiple de CE rayon (`radius`, pas le
+    # plafond `max_radius` -- un multiple du plafond peut fermer une zone
+    # bien plus grande que necessaire, faisant deborder meme le seuil d'aire
+    # relaxe `_NOTCH_SMOOTHING_MAX_AREA_RATIO`, verifie sur le cas reel
+    # "Cherry Moon" ou seul un rayon proche de `radius` -- pas de
+    # `max_radius` -- comblait effectivement l'encoche sans etre rejete).
+    smoothing_radius = min(
+        radius * _NOTCH_SMOOTHING_RADIUS_MULTIPLIER, _NOTCH_SMOOTHING_MAX_RADIUS_PX
+    )
+    envelope = _smooth_envelope_notches(envelope, smoothing_radius)
     return envelope, radius, num_components_before, num_components_after
 
 
