@@ -108,6 +108,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seuil silhouette pour images sans alpha (0.0-1.0)",
     )
 
+    opacity_coupon = subparsers.add_parser(
+        "opacity-coupon",
+        help="Genere le coupon benchmark opacite LithoLab V1",
+    )
+    opacity_coupon.add_argument(
+        "output",
+        nargs="?",
+        default="LithoLab_Opacity_Coupon_V1.stl",
+        help="Fichier STL de sortie",
+    )
+    opacity_coupon.add_argument("--width", type=float, default=100.0, help="Largeur en mm")
+    opacity_coupon.add_argument("--height", type=float, default=30.0, help="Hauteur en mm")
+    opacity_coupon.add_argument(
+        "--resolution",
+        type=float,
+        default=0.5,
+        help="Pas de grille en mm",
+    )
+    opacity_coupon.add_argument(
+        "--thicknesses",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Epaisseurs en mm, ex: --thicknesses 0.6 0.8 1.0 1.5 2.0 2.5 3.0",
+    )
+    opacity_coupon.add_argument(
+        "--no-labels",
+        action="store_true",
+        help="Desactive les labels d'epaisseur en relief",
+    )
+
     return parser
 
 
@@ -310,6 +341,49 @@ def _cmd_lightbox_shape(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_opacity_coupon(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.export.stl_export import export_stl
+    from lithoshape3d.core.geometry.opacity_coupon import (
+        DEFAULT_LITHOLAB_OPACITY_THICKNESSES_MM,
+        OpacityCouponParameters,
+        build_opacity_coupon_mesh,
+    )
+    from lithoshape3d.core.validation.mesh_checks import validate_mesh
+
+    thicknesses = (
+        tuple(args.thicknesses)
+        if args.thicknesses is not None
+        else DEFAULT_LITHOLAB_OPACITY_THICKNESSES_MM
+    )
+    try:
+        params = OpacityCouponParameters(
+            width_mm=args.width,
+            height_mm=args.height,
+            resolution_mm=args.resolution,
+            thicknesses_mm=thicknesses,
+            labels=not args.no_labels,
+        )
+        mesh = build_opacity_coupon_mesh(params)
+    except ValueError as exc:
+        print(f"ECHEC: {exc}")
+        return 1
+
+    validation = validate_mesh(mesh)
+    if not validation.is_valid:
+        print("ECHEC validation du coupon :", ", ".join(validation.issues()))
+        return 1
+
+    output = Path(args.output)
+    export_stl(mesh, output)
+    print(
+        f"OK: {output} "
+        f"({len(mesh.vertices)} sommets, {len(mesh.faces)} faces, "
+        f"volume={validation.volume_mm3:.1f} mm3)"
+    )
+    print("Epaisseurs:", ", ".join(f"{value:g} mm" for value in thicknesses))
+    return 0
+
+
 def _cmd_launch_app() -> int:
     from lithoshape3d.ui.app import run_app
 
@@ -329,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_lightbox_text(args)
     if args.command == "lightbox-shape":
         return _cmd_lightbox_shape(args)
+    if args.command == "opacity-coupon":
+        return _cmd_opacity_coupon(args)
 
     return _cmd_launch_app()
 

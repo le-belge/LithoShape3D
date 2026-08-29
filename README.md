@@ -99,6 +99,23 @@ lithoshape3d generate photo.png sortie.stl --width 100 --min-thickness 0.8 --max
 validé (fermé, manifold, sans triangle dégénéré) avant d'être écrit sur
 disque ; la commande échoue explicitement si la validation échoue.
 
+### Benchmark opacité LithoLab
+
+Une commande headless génère le coupon de test LithoLab V1 pour mesurer la
+transmission lumineuse d'un filament imprimé avec un LithoMeter :
+
+```bash
+lithoshape3d opacity-coupon LithoLab_Opacity_Coupon_V1.stl
+```
+
+Le coupon contient 7 zones d'épaisseur :
+
+`0.6 / 0.8 / 1.0 / 1.5 / 2.0 / 2.5 / 3.0 mm`
+
+Ce STL ne dépend d'aucune image source. Il sert de benchmark reproductible
+pour comparer des filaments, réglages, buses ou machines dans le protocole
+LithoLab.
+
 ### LightBox texte + façade lithophanie
 
 La commande `lightbox-text` génère les premières pièces d'un caisson
