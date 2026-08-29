@@ -125,7 +125,14 @@ def _draw_labels(front_z: np.ndarray, params: OpacityCouponParameters) -> None:
         font=font,
     )
 
-    label_mask = np.asarray(image, dtype=np.uint8) > 0
+    # Pillow indexe ses lignes en Y-DOWN (ligne 0 = haut, cense par
+    # `y_to_pillow_row` ci-dessus), alors que `front_z` est indexe en Y-UP
+    # (ligne 0 = y=0mm, bas -- meme convention que `grid_y` construit via
+    # `np.meshgrid(xs, ys)` avec `ys` croissant). Sans ce retournement, les
+    # labels se retrouvaient verticalement inverses : ceux destines a la
+    # bande basse dediee (pres de y=0) apparaissaient en haut, empietant
+    # sur la zone de mesure optique elle-meme.
+    label_mask = np.flipud(np.asarray(image, dtype=np.uint8) > 0)
     front_z[label_mask] = params.max_coupon_thickness_mm + params.label_relief_mm
 
 
