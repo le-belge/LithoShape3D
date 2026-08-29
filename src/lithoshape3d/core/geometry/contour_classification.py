@@ -216,9 +216,22 @@ def classify_contours_by_containment(
     DISJOINTES (`ContourPart`), chacune avec ses propres trous, par
     confinement geometrique (aucune hypothese even-odd/nonzero).
 
+    Profondeur d'imbrication ARBITRAIRE (pas seulement un niveau) : chaque
+    contour est rattache a son parent IMMEDIAT (le plus petit contour deja
+    connu qui le contient), pas simplement au premier trouve. La parite de
+    la profondeur ainsi obtenue determine le role -- profondeur paire
+    (0, 2, 4, ...) = composante pleine (nouvelle `ContourPart` racine),
+    profondeur impaire = trou de son parent pair immediat. Un contour a
+    profondeur paire IMBRIQUE DANS UN TROU (ex. un ilot/point d'un "i" a
+    l'interieur du contre-poinçon d'une lettre) redevient donc
+    correctement une composante pleine a part entiere, avec ses PROPRES
+    trous eventuels -- pas un trou de plus qui grignoterait a tort la
+    composante racine (limitation de l'ancienne version a un seul niveau
+    racine/trou).
+
     Un contour non contenu dans un autre est une nouvelle composante
-    (racine). Un contour contenu dans une composante deja connue est un trou
-    de cette composante. Les composantes sont triees par aire decroissante.
+    (racine, profondeur 0). Les composantes sont triees par aire
+    decroissante.
 
     Leve `ContourClassificationError` si `contours` est vide ou si aucun
     contour n'est exploitable (tous degeneres/aire nulle)."""
@@ -241,21 +254,28 @@ def classify_contours_by_containment(
 
     rings.sort(key=lambda r: r[0], reverse=True)
 
-    # roots: liste de dicts {exterior, poly, holes} -- une entree par
-    # composante exterieure disjointe deja identifiee.
-    roots: list[dict] = []
-    for area, pts, poly in rings:
+    # Construit une foret de confinement : chaque contour est rattache a
+    # son parent IMMEDIAT (le plus PETIT contour deja connu qui le
+    # contient -- pas n'importe lequel), ce qui donne une profondeur
+    # d'imbrication correcte a n'importe quel niveau.
+    nodes: list[dict] = []
+    for _area, pts, poly in rings:
         rep = poly.representative_point()
-        containing_root = next((r for r in roots if r["poly"].contains(rep)), None)
-        if containing_root is not None:
-            containing_root["holes"].append(pts)
-        else:
-            roots.append({"exterior": pts, "poly": poly, "holes": []})
+        candidates = [n for n in nodes if n["poly"].contains(rep)]
+        parent = min(candidates, key=lambda n: n["poly"].area) if candidates else None
+        depth = parent["depth"] + 1 if parent is not None else 0
+        node = {"exterior": pts, "poly": poly, "depth": depth, "children": []}
+        if parent is not None:
+            parent["children"].append(node)
+        nodes.append(node)
 
     parts: list[ContourPart] = []
-    for root in roots:
+    for node in nodes:
+        if node["depth"] % 2 != 0:
+            continue  # profondeur impaire : trou, deja rattache a son parent pair.
+        holes = [child["exterior"] for child in node["children"]]
         exterior_pts, holes = _repair_touching_hole(
-            root["exterior"], root["holes"], warnings, touching_hole_note
+            node["exterior"], holes, warnings, touching_hole_note
         )
         parts.append(ContourPart(exterior=exterior_pts, holes=holes))
 

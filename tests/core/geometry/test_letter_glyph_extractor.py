@@ -87,18 +87,30 @@ def test_rasterize_letter_mask_matches_shape_at_canvas_scale():
     reason="Police Andale Mono.ttf indisponible sur cette machine (voir recherche ci-dessus).",
 )
 def test_hole_touching_exterior_is_repaired_on_real_font():
-    """Cas degenere reellement reproduit (pas un mock) : le glyphe "0" de
-    `Andale Mono.ttf` dessine un zero barre dont l'anneau interne touche
-    l'anneau externe au niveau de la barre oblique. `Polygon(exterieur,
-    holes=[trou])` est alors invalide au sens OGC avant reparation -- on
-    verifie que l'extraction ne plante pas, produit un avertissement
-    explicite mentionnant la fusion, et retourne un contour final valide."""
+    """Cas reel (pas un mock) : le glyphe "0" de `Andale Mono.ttf` a 3
+    contours imbriques -- anneau exterieur, anneau interieur (le "trou"),
+    et la barre oblique qui traverse ce trou (elle-meme imbriquee DANS le
+    trou). Avec la classification par profondeur d'imbrication arbitraire
+    (`classify_contours_by_containment`), la barre est correctement
+    reconnue comme un ILOT PLEIN a la profondeur 2 (pas un second trou
+    plat du contour exterieur comme avant ce correctif) : la lettre produit
+    2 composantes valides (l'anneau troue + la barre pleine separee),
+    aucune reparation d'invalidite necessaire. Verifie que l'extraction ne
+    plante pas et retourne des contours finaux valides et geometriquement
+    corrects (le trou de l'anneau ET la barre solide doivent survivre)."""
     layout = extract_word_glyphs("0", _TOUCHING_HOLE_FONT, font_size_mm=20.0)
     letter = layout.letters[0]
 
-    assert any("fusionne" in w for w in layout.warnings)
-    for part in letter.parts:
-        assert part.to_shapely().is_valid
+    assert len(letter.parts) == 2
+    polys = [part.to_shapely() for part in letter.parts]
+    for poly in polys:
+        assert poly.is_valid
+
+    ring_part = max(polys, key=lambda p: p.area)
+    bar_part = min(polys, key=lambda p: p.area)
+    assert len(ring_part.interiors) == 1, "L'anneau exterieur doit garder son trou."
+    assert len(bar_part.interiors) == 0, "La barre oblique est un ilot plein, pas un trou."
+    assert bar_part.area > 0
 
 
 def test_multi_part_glyph_i_keeps_both_disjoint_components():

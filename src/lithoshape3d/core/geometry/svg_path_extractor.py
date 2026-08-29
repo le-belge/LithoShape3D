@@ -402,17 +402,23 @@ def extract_svg_components_from_svg(
         y compris des trous imbriques sur plusieurs niveaux.
       - `nonzero` (par defaut, cas le plus frequent) : chaque sous-chemin de
         CE `<path>` est repare individuellement (`_repair_self_intersecting_
-        ring`) et laisse "plat" (ni exterieur ni trou impose) -- la
-        classification exterieur/trou entre CES rings et ceux des AUTRES
-        `<path>` `nonzero` du document reste faite par CONFINEMENT
-        GEOMETRIQUE (`classify_contours_by_containment`), une approximation
-        documentee de la vraie regle `nonzero` (comptage de direction de
-        croisement) qui donne le resultat attendu pour l'immense majorite
-        des logos/silhouettes sans auto-intersection complexe. LIMITATION
-        CONNUE, non resolue par cette fonction : un `<path>` `nonzero`
-        auto-intersectant dont le rendu correct depend precisement du sens
-        de parcours (winding) peut differer du rendu navigateur -- cas rare
-        pour les logos/silhouettes vises par ce pipeline.
+        ring`) puis classe exterieur/trou/ilot par CONFINEMENT GEOMETRIQUE
+        (`classify_contours_by_containment`, profondeur d'imbrication
+        arbitraire), une approximation documentee de la vraie regle
+        `nonzero` (comptage de direction de croisement) qui donne le
+        resultat attendu pour l'immense majorite des logos/silhouettes sans
+        auto-intersection complexe. Ce confinement est calcule SEPAREMENT
+        POUR CHAQUE `<path>` (jamais entre deux `<path>` distincts) : la
+        regle `fill-rule` d'un `<path>` SVG ne s'applique qu'a SES PROPRES
+        sous-chemins -- deux `<path>` distincts ne doivent jamais se
+        "trouer" mutuellement, meme si l'un tombe geometriquement a
+        l'interieur de l'autre (regression corrigee : voir diagnostic
+        Cherry Moon dans `examples/physical_validation/cherry_moon_source/
+        pipeline_debug/`). LIMITATION CONNUE, non resolue par cette
+        fonction : un `<path>` `nonzero` auto-intersectant dont le rendu
+        correct depend precisement du sens de parcours (winding) peut
+        differer du rendu navigateur -- cas rare pour les logos/silhouettes
+        vises par ce pipeline.
 
     Leve `SvgPathExtractionError` si le fichier est illisible, vide, sans
     `<path>` exploitable, ou si un composant est degenere (aire nulle)."""
@@ -498,15 +504,19 @@ def extract_svg_components_from_svg(
         # que `image_shape_extractor.mask_to_polygon` / `LetterGlyph.to_shapely()`.
         return [((x - minx) * exact_scale, (maxy - y) * exact_scale) for x, y in ring]
 
-    nonzero_flat_rings: list[list[tuple[float, float]]] = []
-    evenodd_polygons: list[Polygon | MultiPolygon] = []
-    # Association ordonnee composant -> polygone final, pour reconstituer un
-    # resultat PAR <path> (voir docstring `SvgComponentsResult`) : les
-    # <path> nonzero sont classes ENSEMBLE (confinement geometrique
-    # partage entre eux, approximation documentee), donc regroupes en un
-    # seul "pseudo-composant" a la fin ; chaque <path> evenodd reste son
-    # propre composant (XOR interne exact, independant des autres <path>).
-    nonzero_present = False
+    components: list[Polygon | MultiPolygon] = []
+    # Chaque <path> d'origine reste son propre composant, evenodd COMME
+    # nonzero (une regression corrigee ici : le confinement geometrique
+    # `nonzero` etait auparavant calcule sur les anneaux de TOUS les <path>
+    # `nonzero` du document regroupes ENSEMBLE avant classification -- or la
+    # regle `fill-rule` d'un <path> SVG ne s'applique QU'A SES PROPRES
+    # sous-chemins ; deux <path> distincts n'ont aucune raison de "se
+    # trouer" mutuellement juste parce que l'un tombe geometriquement a
+    # l'interieur de l'autre. Constate concretement sur un SVG reel
+    # (Cherry Moon) : le "O" d'un <path> independant devenait un trou
+    # parasite dans le grand demi-cercle d'un AUTRE <path>, simplement
+    # parce que son centre tombait dedans -- diagnostic complet dans
+    # `examples/physical_validation/cherry_moon_source/pipeline_debug/`.
     for rings, fill_rule in per_path_rings:
         rings_mm = [_to_mm(ring) for ring in rings]
         if fill_rule == "evenodd":
@@ -519,24 +529,22 @@ def extract_svg_components_from_svg(
             for p in polys[1:]:
                 combined = combined.symmetric_difference(p)
             if not combined.is_empty and combined.area > 0:
-                evenodd_polygons.append(combined)
+                components.append(combined)
         else:
-            nonzero_present = True
+            path_rings: list[list[tuple[float, float]]] = []
             for ring in rings_mm:
-                nonzero_flat_rings.extend(_repair_self_intersecting_ring(ring))
-
-    components: list[Polygon | MultiPolygon] = []
-    if nonzero_present and nonzero_flat_rings:
-        try:
-            parts, _warnings = classify_contours_by_containment(
-                nonzero_flat_rings, touching_hole_note="extraction SVG vectorielle"
-            )
-        except ContourClassificationError as exc:
-            raise SvgPathExtractionError(str(exc)) from exc
-        nonzero_polygons = [part.to_shapely() for part in parts]
-        nonzero_polygons = [p for p in nonzero_polygons if not p.is_empty and p.area > 0]
-        components.extend(nonzero_polygons)
-    components.extend(evenodd_polygons)
+                path_rings.extend(_repair_self_intersecting_ring(ring))
+            if not path_rings:
+                continue
+            try:
+                parts, _warnings = classify_contours_by_containment(
+                    path_rings, touching_hole_note="extraction SVG vectorielle"
+                )
+            except ContourClassificationError as exc:
+                raise SvgPathExtractionError(str(exc)) from exc
+            nonzero_polygons = [part.to_shapely() for part in parts]
+            nonzero_polygons = [p for p in nonzero_polygons if not p.is_empty and p.area > 0]
+            components.extend(nonzero_polygons)
 
     if not components:
         raise SvgPathExtractionError(

@@ -24,6 +24,7 @@ from lithoshape3d.core.geometry.svg_path_extractor import (
     SvgPathExtractionError,
     adaptive_tessellate_segment,
     extract_polygon_from_svg,
+    extract_svg_components_from_svg,
 )
 
 _FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "svg"
@@ -199,6 +200,68 @@ def test_extract_polygon_from_svg_invalid_width_mm_raises():
 def test_extract_polygon_from_svg_invalid_chord_error_raises():
     with pytest.raises(ValueError):
         extract_polygon_from_svg(str(_TESLA_SVG), 50.0, max_chord_error_mm=0.0)
+
+
+# --------------------------------------------------------------------- #
+# Regression : contamination croisee entre <path> nonzero independants
+# (diagnostic Cherry Moon -- voir examples/physical_validation/
+# cherry_moon_source/pipeline_debug/) et ilots imbriques a profondeur > 1.
+# --------------------------------------------------------------------- #
+
+
+def test_two_independent_nonzero_paths_do_not_hole_each_other(tmp_path):
+    """Un `<path>` B geometriquement CONTENU dans la bbox/aire d'un `<path>`
+    A independant ne doit JAMAIS devenir un trou de A -- la regle
+    `fill-rule` (nonzero par defaut) ne s'applique QU'AUX sous-chemins d'un
+    MEME `<path>`. Reproduit le bug reel trouve sur Cherry Moon : le "O"
+    d'un `<path>` independant etait absorbe comme trou parasite (216.98
+    mm2) dans le demi-disque d'un autre `<path>`, simplement parce que son
+    centre tombait geometriquement dedans."""
+    svg = tmp_path / "cross_path.svg"
+    # Path A : grand carre 0..100. Path B : petit cercle (approx octogone)
+    # centre en (50,50), entierement contenu dans A -- mais un <path> SEPARE.
+    square = "M 0,0 L 100,0 L 100,100 L 0,100 Z"
+    circle = "M 60,50 L 57,57 L 50,60 L 43,57 L 40,50 L 43,43 L 50,40 L 57,43 Z"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        f'<path d="{square}" /><path d="{circle}" /></svg>'
+    )
+
+    result = extract_svg_components_from_svg(str(svg), 100.0)
+
+    assert len(result.polygons) == 2, "Les deux <path> doivent rester deux composantes SOLIDES distinctes."
+    for poly in result.polygons:
+        holes = list(poly.interiors) if poly.geom_type == "Polygon" else []
+        assert len(holes) == 0, "Aucun des deux <path> ne doit avoir de trou -- ils sont independants."
+
+
+def test_nested_island_within_hole_becomes_separate_solid_component(tmp_path):
+    """Un `<path>` avec 3 sous-chemins imbriques (exterieur plein, trou,
+    ilot plein A L'INTERIEUR DU TROU -- profondeur 2) doit produire DEUX
+    composantes solides valides : l'exterieur avec son trou, ET l'ilot
+    comme composante separee -- pas un trou de plus qui grignoterait
+    l'exterieur (limitation de l'ancien algorithme a un seul niveau
+    racine/trou, corrigee dans `classify_contours_by_containment`)."""
+    svg = tmp_path / "nested_island.svg"
+    outer = "M 0,0 L 100,0 L 100,100 L 0,100 Z"
+    hole = "M 20,20 L 80,20 L 80,80 L 20,80 Z"
+    island = "M 40,40 L 60,40 L 60,60 L 40,60 Z"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        f'<path d="{outer} {hole} {island}" /></svg>'
+    )
+
+    result = extract_svg_components_from_svg(str(svg), 100.0)
+
+    assert len(result.polygons) == 2
+    areas = sorted((p.area for p in result.polygons), reverse=True)
+    # exterieur (100x100 - trou 60x60) = 6400, ilot (20x20) = 400.
+    assert areas[0] == pytest.approx(6400.0, rel=1e-6)
+    assert areas[1] == pytest.approx(400.0, rel=1e-6)
+    outer_poly = max(result.polygons, key=lambda p: p.area)
+    island_poly = min(result.polygons, key=lambda p: p.area)
+    assert len(outer_poly.interiors) == 1
+    assert len(island_poly.interiors) == 0
 
 
 # --------------------------------------------------------------------- #

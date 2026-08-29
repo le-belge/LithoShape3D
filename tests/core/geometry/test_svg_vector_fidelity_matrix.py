@@ -85,12 +85,17 @@ def _bezier_svg(tmp_path: Path) -> Path:
 
 
 def _ring_svg(tmp_path: Path) -> Path:
-    # Anneau : deux <path> nonzero de sens de parcours OPPOSE (exterieur
-    # horaire, interieur anti-horaire) -- classification par confinement
-    # geometrique attendue : cercle interieur = trou.
+    # Anneau : DEUX SOUS-CHEMINS d'un MEME <path> (comme un vrai logo/lettre
+    # "O" est authore en pratique -- cf. Cherry Moon), sens de parcours
+    # OPPOSE (exterieur horaire, interieur anti-horaire). La regle SVG
+    # `fill-rule` (nonzero par defaut) ne s'applique QU'AUX sous-chemins
+    # d'un MEME <path> : deux <path> distincts ne doivent JAMAIS se "trouer"
+    # mutuellement seulement parce que l'un tombe geometriquement dans
+    # l'autre (bug de contamination croisee corrige -- diagnostic complet
+    # dans examples/physical_validation/cherry_moon_source/pipeline_debug/).
     outer = "M 180,100 A 80,80 0 1 1 20,100 A 80,80 0 1 1 180,100 Z"
     inner = "M 140,100 A 40,40 0 1 0 60,100 A 40,40 0 1 0 140,100 Z"
-    return _write(tmp_path, "ring.svg", f'<path d="{outer}" /><path d="{inner}" />')
+    return _write(tmp_path, "ring.svg", f'<path d="{outer} {inner}" />')
 
 
 def _asymmetric_svg(tmp_path: Path) -> Path:
