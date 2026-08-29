@@ -241,3 +241,67 @@ def test_generate_lightbox_from_svg_source_uses_direct_vector_path_not_raster(tm
     cap_mesh = trimesh.load(cap_paths[0])
     assert body_mesh.is_watertight
     assert cap_mesh.is_watertight
+
+
+_CHERRY_MOON_SVG = (
+    Path(__file__).resolve().parents[3]
+    / "examples"
+    / "physical_validation"
+    / "cherry_moon_source"
+    / "cherry_moon.svg"
+)
+
+
+@pytest.mark.skipif(not _TESLA_SVG.exists(), reason="fixture Tesla_T_symbol.svg absente")
+def test_generate_lightbox_artwork_envelope_from_tesla_svg_uses_vector_path_and_is_watertight(tmp_path):
+    """Refonte "source de verite vectorielle unique" : `shape_mode=
+    'artwork_envelope'` avec une source `.svg` doit desormais utiliser le
+    MEME moteur vectoriel que `silhouette` (`extract_artwork_from_svg`),
+    SANS aucune rasterisation -- le fichier `.svg` est transmis TEL QUEL.
+    Verifie un corps ET un capot watertight generes reellement (pas juste
+    des polygones intermediaires)."""
+    result = generate_lightbox_from_image(
+        _TESLA_SVG,
+        tmp_path / "out_tesla_artwork",
+        width_mm=100.0,
+        depth_mm=25.0,
+        shape_mode="artwork_envelope",
+    )
+
+    assert not result.errors, result.errors
+    assert result.threshold_used is None  # pipeline vectoriel : aucun seuillage
+    body_paths = [p for p in result.written if p.name.endswith("_corps.stl")]
+    cap_paths = [p for p in result.written if p.name.endswith("_capot.stl")]
+    assert len(body_paths) == 1
+    assert len(cap_paths) == 1
+
+    body_mesh = trimesh.load(body_paths[0])
+    cap_mesh = trimesh.load(cap_paths[0])
+    assert body_mesh.is_watertight
+    assert cap_mesh.is_watertight
+
+
+@pytest.mark.skipif(not _CHERRY_MOON_SVG.exists(), reason="fixture cherry_moon.svg absente")
+def test_generate_lightbox_artwork_envelope_from_cherry_moon_svg_is_watertight(tmp_path):
+    """Meme verification que pour Tesla, sur le second cas reel demande
+    explicitement (Cherry Moon) -- forme composee d'elements potentiellement
+    disjoints (tirets decoratifs) soudes par `vector_envelope.py`, sans
+    aucun hack "cercle englobant forcee" (retire de cette session)."""
+    result = generate_lightbox_from_image(
+        _CHERRY_MOON_SVG,
+        tmp_path / "out_cherry_moon_artwork",
+        width_mm=100.0,
+        depth_mm=25.0,
+        shape_mode="artwork_envelope",
+    )
+
+    assert not result.errors, result.errors
+    body_paths = [p for p in result.written if p.name.endswith("_corps.stl")]
+    cap_paths = [p for p in result.written if p.name.endswith("_capot.stl")]
+    assert len(body_paths) == 1
+    assert len(cap_paths) == 1
+
+    body_mesh = trimesh.load(body_paths[0])
+    cap_mesh = trimesh.load(cap_paths[0])
+    assert body_mesh.is_watertight
+    assert cap_mesh.is_watertight

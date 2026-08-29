@@ -145,39 +145,42 @@ def generate_lightbox_from_image(
     cap_mode: str | None = None,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
-    force_convex_envelope: bool = False,
 ) -> LightboxImageResult:
     """Genere un caisson lumineux vectoriel depuis une image (corps + fond +
     capot + DXF).
 
-    `image_path` peut etre soit un raster PNG/JPG, soit -- en `shape_mode=
-    "silhouette"` uniquement -- un fichier `.svg` source, auquel cas le
-    contour vectoriel EXACT (courbes de Bezier tessellees adaptativement,
-    voir `svg_path_extractor.py`) est utilise directement, SANS rasterisation
-    prealable : la rasterisation via QtSvg (`ui/shape_svg_import.py`)
-    perdait les vraies courbes du SVG des la premiere etape, quelle que soit
-    la qualite de la simplification/lissage appliquee ensuite sur le contour
-    pixel resultant. `svg_path_extractor.py` est pur `core/` (lxml +
-    svgpathtools, aucun Qt), donc ce branchement ne viole pas la contrainte
+    `image_path` peut etre soit un raster PNG/JPG, soit un fichier `.svg`
+    source -- dans TOUS les cas (`shape_mode="silhouette"` ET
+    `shape_mode="artwork_envelope"`), un `.svg` est traite par le contour
+    vectoriel EXACT (courbes de Bezier tessellees adaptativement, voir
+    `svg_path_extractor.py`), JAMAIS rasterise prealablement : la
+    rasterisation via QtSvg (`ui/shape_svg_import.py`) perdait les vraies
+    courbes du SVG des la premiere etape, quelle que soit la qualite de la
+    simplification/lissage appliquee ensuite sur le contour pixel resultant
+    -- ce constat vaut identiquement pour les deux modes, pas seulement
+    `silhouette`. `svg_path_extractor.py` (et `vector_envelope.py`, utilise
+    par `artwork_envelope`) sont purs `core/` (lxml + svgpathtools +
+    shapely, aucun Qt), donc ce branchement ne viole pas la contrainte
     architecturale `core/` -> jamais Qt.
 
-    En `shape_mode="artwork_envelope"`, un `.svg` doit TOUJOURS etre
-    rasterise par l'appelant avant l'appel (comme avant) : ce mode repose
-    sur des operations morphologiques raster (fermeture, fill-from-border,
-    voir `artwork_shape_extractor.py`) qui n'ont pas d'equivalent vectoriel
-    direct dans ce pipeline -- limitation documentee, pas un branchement
-    fragile force.
-
     `shape_mode` :
-      - `"silhouette"` (par defaut, inchange pour les rasters) : contour =
-        silhouette extraite par `image_shape_extractor.extract_shape_from_image`
-        (Cas A alpha ou Cas B seuillage photo) pour un raster, ou par
-        `svg_path_extractor.extract_polygon_from_svg` pour un `.svg`.
+      - `"silhouette"` (par defaut) : contour = silhouette extraite par
+        `image_shape_extractor.extract_shape_from_image` (Cas A alpha ou
+        Cas B seuillage photo) pour un raster, ou par
+        `svg_path_extractor.extract_polygon_from_svg` (union simple des
+        composants vectoriels) pour un `.svg`.
       - `"artwork_envelope"` : contour = enveloppe unifiee d'un dessin au
-        trait (`artwork_shape_extractor.extract_artwork_from_image`) -- un
-        seul caisson meme si le dessin source a des elements disjoints
-        (ex. poings qui ne touchent pas un cercle). Source toujours raster
-        (voir note ci-dessus).
+        trait -- un seul caisson meme si le dessin source a des elements
+        disjoints (ex. poings qui ne touchent pas un cercle, tirets
+        decoratifs). Pour un raster :
+        `artwork_shape_extractor.extract_artwork_from_image` (fermeture
+        morphologique PIXEL). Pour un `.svg` :
+        `artwork_shape_extractor.extract_artwork_from_svg` (MEME moteur de
+        parsing/tessellation vectoriel que `silhouette` --
+        `svg_path_extractor.extract_svg_components_from_svg` -- puis
+        soudure GEOMETRIQUE des composants disjoints via
+        `vector_envelope.weld_disjoint_components`, PAS de fermeture
+        morphologique pixel pour cette source).
 
     `cap_mode` (`None` = comportement historique : lithophanie si
     `cap_image_path` fourni, sinon plat) :
@@ -300,22 +303,28 @@ def generate_lightbox_from_image(
         from lithoshape3d.core.geometry.artwork_shape_extractor import (
             ArtworkExtractionError,
             extract_artwork_from_image,
+            extract_artwork_from_svg,
         )
 
         try:
-            artwork_kwargs = {}
-            if min_component_area_ratio is not None:
-                artwork_kwargs["min_component_area_ratio"] = min_component_area_ratio
-            artwork = extract_artwork_from_image(
-                image_path,
-                width_mm,
-                threshold_mode=threshold_mode,
-                threshold_value=threshold_value,
-                closing_radius_px=closing_radius_px,
-                max_closing_radius_px=max_closing_radius_px,
-                force_convex_envelope=force_convex_envelope,
-                **artwork_kwargs,
-            )
+            if str(image_path).lower().endswith(".svg"):
+                # Chemin vectoriel direct (pas de rasterisation), meme
+                # moteur de parsing/tessellation que le mode silhouette --
+                # voir docstring de fonction et `vector_envelope.py`.
+                artwork = extract_artwork_from_svg(image_path, width_mm)
+            else:
+                artwork_kwargs = {}
+                if min_component_area_ratio is not None:
+                    artwork_kwargs["min_component_area_ratio"] = min_component_area_ratio
+                artwork = extract_artwork_from_image(
+                    image_path,
+                    width_mm,
+                    threshold_mode=threshold_mode,
+                    threshold_value=threshold_value,
+                    closing_radius_px=closing_radius_px,
+                    max_closing_radius_px=max_closing_radius_px,
+                    **artwork_kwargs,
+                )
         except (ArtworkExtractionError, ValueError, OSError) as exc:
             result.messages.append(("error", f"extraction de l'enveloppe artwork : {exc}"))
             return result

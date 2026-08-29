@@ -146,17 +146,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     image_box.add_argument(
-        "--force-convex-envelope",
-        action="store_true",
-        help=(
-            "artwork-envelope uniquement : remplace le contour par son cercle englobant "
-            "minimal (ignore les meplats locaux du dessin -- utile pour un logo "
-            "conceptuellement circulaire dont le trace reel n'atteint pas exactement un "
-            "cercle parfait, ex. Cherry Moon). NE PAS utiliser sur un dessin volontairement "
-            "non circulaire (ex. Thunderdome)."
-        ),
-    )
-    image_box.add_argument(
         "--cap-mode",
         default=None,
         choices=["flat", "lithophane", "flat-two-color"],
@@ -362,20 +351,11 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
 
     image_path = args.image
     shape_mode = args.shape_mode.replace("-", "_")
-    if str(image_path).lower().endswith(".svg") and shape_mode == "artwork_envelope":
-        # SVG -> PNG rasterise (Qt, via QtSvg) : responsabilite de cette
-        # couche CLI, pas de core/ (qui ne doit jamais dependre de Qt, cf.
-        # test_architecture_boundaries.py) -- meme mecanisme que le Shape
-        # Composer pour un SVG importe (ui/shape_svg_import.py). Uniquement
-        # necessaire en mode "artwork_envelope" : ce mode repose sur des
-        # operations morphologiques raster sans equivalent vectoriel direct
-        # (voir docstring de `generate_lightbox_from_image`). En mode
-        # "silhouette" (par defaut), le `.svg` est passe TEL QUEL --
-        # `generate_lightbox_from_image` utilise alors le contour vectoriel
-        # exact (`core/geometry/svg_path_extractor.py`), sans rasterisation.
-        from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
-
-        image_path = rasterize_svg_to_alpha_png(str(image_path))
+    # Un `.svg` n'est JAMAIS rasterise avant l'appel, quel que soit le mode :
+    # `generate_lightbox_from_image` utilise directement le contour
+    # vectoriel exact (`core/geometry/svg_path_extractor.py` pour
+    # "silhouette", `core/geometry/vector_envelope.py` en plus pour
+    # "artwork_envelope") -- voir sa docstring.
 
     threshold_raw = args.threshold.strip()
     if threshold_raw.lower() == "auto":
@@ -412,7 +392,6 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
         "cap_mode": cap_mode,
         "closing_radius_px": args.closing_radius_px,
         "max_closing_radius_px": args.max_closing_radius_px,
-        "force_convex_envelope": args.force_convex_envelope,
     }
     if args.cap_thickness_mm is not None:
         kwargs["cap_thickness_mm"] = args.cap_thickness_mm

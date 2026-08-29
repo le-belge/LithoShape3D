@@ -63,7 +63,24 @@ def _extrude_geom(geom, height: float, z0: float):
     extrusions independantes ne partagent aucune face a fusionner, mais
     rester deux corps disjoints dans le meme fichier STL est un mesh
     valide -- l'union reste utile pour uniformiser le traitement en aval
-    (une difference booleenne unique avec la cavite)."""
+    (une difference booleenne unique avec la cavite).
+
+    Chaque mesh extrude est verifie/CORRIGE en volume (`mesh.invert()` si
+    negatif) : une chaine d'operations booleennes shapely (intersection/
+    difference/union, ex. decoupe du capot 2 couleurs) peut produire des
+    composantes dont l'extrusion ressort a volume negatif (constate
+    reellement sur un cas a ~50 composantes, logo "Cherry Moon" -- quelques
+    sous-polygones donnaient un solide "invers~e" malgre un contour
+    exterieur shapely deja anti-horaire (`shapely.geometry.polygon.orient`
+    seul ne suffit PAS : le moteur de triangulation interne de
+    `trimesh.creation.extrude_polygon`, ici `manifold3d`, ne suit pas
+    necessairement la convention de sens de parcours du polygone source).
+    Corriger au niveau du MESH (verifier le signe du volume calcule, inverser
+    les faces si negatif) est plus robuste que d'esperer un pre-tri correct
+    du polygone source -- fonctionne quel que soit le moteur de
+    triangulation. Pas un cas isole a ce fichier : tout polygone complexe
+    issu d'une chaine de booleennes peut presenter ce defaut -- correction
+    generique, systematique sur CHAQUE composante."""
     import trimesh
 
     if geom is None or geom.is_empty:
@@ -74,6 +91,8 @@ def _extrude_geom(geom, height: float, z0: float):
         if poly.is_empty or poly.area <= 0:
             continue
         mesh = trimesh.creation.extrude_polygon(poly, height=height)
+        if mesh.volume < 0:
+            mesh.invert()
         mesh.apply_translation((0.0, 0.0, z0))
         meshes.append(mesh)
     if not meshes:

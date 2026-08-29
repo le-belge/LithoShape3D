@@ -24,7 +24,6 @@ import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -113,13 +112,16 @@ class LightboxImageDialog(QDialog):
         `core/`, uniquement a des fins de previsualisation/seuillage)."""
         self._svg_source_path: str | None = None
         """Chemin du `.svg` ORIGINAL si la source est un SVG, sinon `None`.
-        En mode `shape_mode="silhouette"`, c'est ce chemin (PAS le raster
-        de previsualisation) qui est transmis a `generate_lightbox_from_image`
-        -- le pipeline core utilise alors le contour vectoriel exact
-        (`core/geometry/svg_path_extractor.py`), sans repasser par le
-        raster. En mode `"artwork_envelope"`, le raster reste utilise (ce
-        mode n'a pas d'equivalent vectoriel direct, voir docstring de
-        `generate_lightbox_from_image`)."""
+        Transmis TEL QUEL (PAS le raster de previsualisation) a
+        `generate_lightbox_from_image`, quel que soit `shape_mode` -- les
+        deux modes ("silhouette" ET "artwork_envelope") utilisent le
+        contour vectoriel exact pour une source `.svg` (voir
+        `core/geometry/svg_path_extractor.py` et
+        `core/geometry/vector_envelope.py`), sans jamais rasteriser. Le
+        raster resolu (`_resolved_image_path`) reste utilise UNIQUEMENT
+        pour l'apercu 2D bon marche de cette fenetre (silhouette) ou est
+        rasterise a la volee depuis le resultat vectoriel (artwork,
+        `_rasterize_vector_preview`)."""
         self._alpha: np.ndarray | None = None
         self._gray: np.ndarray | None = None
         self._output_dir: str = ""
@@ -172,16 +174,6 @@ class LightboxImageDialog(QDialog):
         )
         self.shape_mode_combo.currentIndexChanged.connect(self._on_shape_mode_changed)
         form.addRow("Mode de forme", self.shape_mode_combo)
-
-        self.force_convex_checkbox = QCheckBox("Forcer un cercle parfait (ignore les meplats du dessin)")
-        self.force_convex_checkbox.setToolTip(
-            "Remplace le contour par son cercle englobant minimal -- pour un logo "
-            "conceptuellement circulaire dont le trace reel n'atteint pas exactement un "
-            "cercle parfait (ex. Cherry Moon). NE PAS activer sur un dessin volontairement "
-            "non circulaire (ex. Thunderdome) -- la forme serait remplacee par un disque plein."
-        )
-        self.force_convex_checkbox.stateChanged.connect(lambda _checked: self._refresh_preview())
-        form.addRow("", self.force_convex_checkbox)
 
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(5.0, 1000.0)
@@ -354,7 +346,10 @@ class LightboxImageDialog(QDialog):
         `artwork_shape_extractor.extract_artwork_from_image`) -- le slider
         de seuil reste donc pertinent meme pour un PNG avec canal alpha,
         contrairement au mode silhouette (Cas A alpha exploitable = pas de
-        seuillage)."""
+        seuillage). Sans objet pour une source `.svg` (pipeline vectoriel,
+        aucun seuillage, voir `extract_artwork_from_svg`)."""
+        if self._svg_source_path:
+            return False
         if self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK:
             return True
         return self._alpha is None
@@ -388,9 +383,6 @@ class LightboxImageDialog(QDialog):
     def _on_shape_mode_changed(self, _index: int) -> None:
         is_artwork = self.shape_mode_combo.currentData() == _SHAPE_MODE_ARTWORK
         self.artwork_info_label.setVisible(is_artwork)
-        self.force_convex_checkbox.setVisible(is_artwork)
-        if not is_artwork:
-            self.force_convex_checkbox.setChecked(False)
         if self._gray is not None:
             self.threshold_row_widget.setVisible(self._threshold_relevant())
         if not is_artwork and self.cap_mode_combo.currentData() == _CAP_MODE_FLAT_TWO_COLOR:
@@ -511,17 +503,28 @@ class LightboxImageDialog(QDialog):
         from lithoshape3d.core.geometry.artwork_shape_extractor import (
             ArtworkExtractionError,
             extract_artwork_from_arrays,
+            extract_artwork_from_svg,
         )
 
-        threshold_mode, threshold_value = self._resolve_threshold_args()
-
         try:
-            result = extract_artwork_from_arrays(
-                self._gray,
-                self.width_spin.value(),
-                threshold_mode=threshold_mode,
-                threshold_value=threshold_value,
-            )
+            if self._svg_source_path:
+                # Source SVG : pipeline vectoriel (`extract_artwork_from_svg`,
+                # pas de rasterisation) -- aucun masque pixel produit, donc
+                # on RASTERISE uniquement les polygones resultants pour cet
+                # apercu 2D bon marche (voir `rasterize_polygon_mask`, deja
+                # utilise ailleurs pour la meme raison -- ceci ne concerne
+                # QUE l'affichage, pas l'extraction geometrique elle-meme).
+                result = extract_artwork_from_svg(self._svg_source_path, self.width_spin.value())
+                ink_mask, envelope_mask = self._rasterize_vector_preview(result)
+            else:
+                threshold_mode, threshold_value = self._resolve_threshold_args()
+                result = extract_artwork_from_arrays(
+                    self._gray,
+                    self.width_spin.value(),
+                    threshold_mode=threshold_mode,
+                    threshold_value=threshold_value,
+                )
+                ink_mask, envelope_mask = result.ink_mask, result.envelope_mask
         except ArtworkExtractionError as exc:
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.setText(f"Enveloppe introuvable : {exc}")
@@ -533,17 +536,43 @@ class LightboxImageDialog(QDialog):
             self.artwork_info_label.setText("")
             return
 
-        self._update_preview_pixmap_rgb(self._artwork_preview_rgb(result.ink_mask, result.envelope_mask))
+        self._update_preview_pixmap_rgb(self._artwork_preview_rgb(ink_mask, envelope_mask))
 
-        info = f"{result.num_components_before_closing} composante(s) d'encre detectee(s)."
-        if result.closing_radius_px:
+        info = f"{result.num_components_before_closing} composante(s) detectee(s)."
+        if result.weld_distance_mm:
+            info += (
+                f" Soudure vectorielle automatique (distance {result.weld_distance_mm:.2f}mm) -> "
+                "1 caisson unique."
+            )
+        elif result.closing_radius_px:
             info += (
                 f" Fermeture automatique (rayon {result.closing_radius_px}px) -> "
                 "1 caisson unique."
             )
         else:
-            info += " Deja unifiees : aucune fermeture necessaire."
+            info += " Deja unifiees : aucune soudure/fermeture necessaire."
         self.artwork_info_label.setText(info)
+
+    def _rasterize_vector_preview(self, result) -> tuple[np.ndarray, np.ndarray]:
+        """Rasterise `result.ink_polygon`/`result.envelope_polygon` (source
+        `.svg`, pipeline vectoriel) en deux masques pixel -- UNIQUEMENT pour
+        composer l'apercu 2D bon marche de `_artwork_preview_rgb` (meme
+        fonction de rasterisation que `image_lightbox_export.compute_shape_
+        and_cap_mask`, deja utilisee pour un usage similaire). N'affecte en
+        rien la geometrie extraite/exportee (qui reste 100% vectorielle)."""
+        from lithoshape3d.core.geometry.heightmap import grid_dimensions
+        from lithoshape3d.core.geometry.letter_glyph_extractor import rasterize_polygon_mask
+        from lithoshape3d.core.scene.models import GeometryParameters
+
+        face_params = GeometryParameters(width_mm=result.width_mm, height_mm=result.height_mm)
+        rows, cols = grid_dimensions(face_params)
+        envelope_mask = rasterize_polygon_mask(
+            result.envelope_polygon, result.width_mm, result.height_mm, rows, cols
+        )
+        ink_mask = rasterize_polygon_mask(
+            result.ink_polygon, result.width_mm, result.height_mm, rows, cols
+        )
+        return ink_mask, envelope_mask
 
     @staticmethod
     def _artwork_preview_rgb(ink_mask: np.ndarray, envelope_mask: np.ndarray) -> np.ndarray:
@@ -610,14 +639,13 @@ class LightboxImageDialog(QDialog):
         threshold_mode, threshold_value = self._resolve_threshold_args()
         shape_mode = self.shape_mode_combo.currentData()
 
-        # Mode silhouette + source SVG : passe le SVG ORIGINAL (contour
-        # vectoriel exact via `core/geometry/svg_path_extractor.py`), pas le
-        # raster de previsualisation -- voir `_svg_source_path`.
-        generation_image_path = (
-            self._svg_source_path
-            if (shape_mode == _SHAPE_MODE_SILHOUETTE and self._svg_source_path)
-            else self._resolved_image_path
-        )
+        # Source SVG (silhouette OU artwork_envelope) : passe le SVG
+        # ORIGINAL (contour vectoriel exact via
+        # `core/geometry/svg_path_extractor.py` + `vector_envelope.py` en
+        # artwork_envelope), jamais le raster de previsualisation -- voir
+        # `_svg_source_path`. Les deux modes utilisent desormais le meme
+        # moteur vectoriel pour une source `.svg` (aucune rasterisation).
+        generation_image_path = self._svg_source_path or self._resolved_image_path
 
         self.generate_button.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -637,7 +665,6 @@ class LightboxImageDialog(QDialog):
             cap_image_transform=cap_transform,
             shape_mode=shape_mode,
             cap_mode=cap_mode,
-            force_convex_envelope=self.force_convex_checkbox.isChecked(),
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)

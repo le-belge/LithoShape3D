@@ -198,19 +198,30 @@ class ArtworkExtractionResult:
     ferme/unifie, pour le capot 2 couleurs."""
     width_mm: float
     height_mm: float
-    ink_mask: np.ndarray
+    ink_mask: np.ndarray | None
     """Masque d'encre (convention image, row0=haut) -- expose pour la
-    previsualisation UI."""
-    envelope_mask: np.ndarray
+    previsualisation UI. `None` pour une source `.svg` (pipeline vectoriel,
+    voir `extract_artwork_from_svg` -- aucun masque pixel n'est produit ;
+    l'UI peut au besoin rasteriser `ink_polygon`/`envelope_polygon`
+    UNIQUEMENT pour l'affichage d'apercu, jamais pour l'extraction elle-meme)."""
+    envelope_mask: np.ndarray | None
     """Masque enveloppe final (apres fill-from-border + fermeture
-    eventuelle) -- expose pour la previsualisation UI."""
-    threshold_used: int
+    eventuelle) -- expose pour la previsualisation UI. `None` pour une
+    source `.svg` (voir `ink_mask`)."""
+    threshold_used: int | None
+    """`None` pour une source `.svg` (pas de seuillage, pipeline vectoriel)."""
     closing_radius_px: int
     """Rayon de fermeture morphologique effectivement applique, en pixels
     du masque de travail. 0 si l'encre etait deja une seule composante
-    connexe (aucune fermeture necessaire)."""
+    connexe (aucune fermeture necessaire), ou pour une source `.svg` (la
+    soudure equivalente est `weld_distance_mm`, en mm, pas en pixels --
+    voir `vector_envelope.weld_disjoint_components`)."""
     num_components_before_closing: int
     num_components_after_closing: int
+    weld_distance_mm: float = 0.0
+    """Distance de soudure vectorielle appliquee (mm) -- uniquement pour une
+    source `.svg` en mode `artwork_envelope` (0.0 sinon, y compris quand le
+    pipeline raster est utilise)."""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -415,39 +426,29 @@ def extract_artwork_from_arrays(
     min_component_area_ratio: float = _DEFAULT_INK_MIN_COMPONENT_AREA_RATIO,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
-    force_convex_envelope: bool = False,
 ) -> ArtworkExtractionResult:
-    """Coeur du pipeline d'extraction artwork, a partir d'un tableau
+    """Coeur du pipeline d'extraction artwork RASTER, a partir d'un tableau
     niveaux de gris DEJA CHARGE (pas de lecture disque) -- meme separation
     array/fichier que `image_shape_extractor.extract_shape_from_arrays`,
     pour que l'UI recalcule une previsualisation a chaque changement de
-    seuil sans relire le fichier.
+    seuil sans relire le fichier. Reserve aux images RASTER sans donnees
+    vectorielles disponibles (PNG/JPG) -- pour une source `.svg`, voir
+    `extract_artwork_from_svg` (pipeline vectoriel, aucune rasterisation).
 
     Un dessin au trait n'a, par definition, pas de canal alpha exploitable
     (voir docstring de module) : contrairement au pipeline silhouette, il
     n'y a qu'un seul chemin -- seuillage Cas B (`threshold_and_clean_mask`,
     REUTILISE, pas duplique) -- suivi du calcul enveloppe.
 
-    `force_convex_envelope` (False par defaut) : remplace le contour
-    d'enveloppe par son CERCLE ENGLOBANT MINIMAL (`shapely.
-    minimum_bounding_circle`) -- option demandee explicitement par
-    l'utilisateur pour un dessin conceptuellement circulaire (logo
-    "Cherry Moon") dont le contour reel, calcule fidelement depuis
-    l'encre du dessin (texte en arc, ligne de separation du "moon",
-    tirets decoratifs), presente des meplats locaux la ou ces elements
-    n'atteignent pas exactement un cercle parfait -- un lissage de
-    notch/Chaikin plus agressif ne peut PAS corriger ca (ce ne sont pas
-    des artefacts de fermeture morphologique mais de vraies
-    caracteristiques du dessin source). Le simple CONVEX HULL a ete
-    essaye en premier et rejete : sur un nuage de points extremes epars
-    (quelques sommets de lettres, pas une vraie densite circulaire), le
-    hull reste un polygone anguleux (quadrilatere/losange arrondi par
-    Chaikin, pas un cercle) -- `minimum_bounding_circle` donne le VRAI
-    plus petit cercle contenant l'enveloppe, quelle que soit la
-    repartition des points. NE PAS activer par defaut : un dessin
-    volontairement concave/non circulaire (ex. "Thunderdome", poings
-    ecartes du cercle central) serait completement denature (rempli par
-    le disque englobant)."""
+    NOTE (nettoyage architectural) : cette fonction exposait auparavant un
+    parametre `force_convex_envelope` qui remplaçait le contour d'enveloppe
+    par son cercle englobant minimal -- retire : un contour d'enveloppe qui
+    reste visiblement non circulaire a certains endroits est un
+    comportement ATTENDU et FIDELE au dessin source (le dessin lui-meme
+    n'atteint pas un cercle parfait a ces points), pas un defaut a corriger
+    par un hack geometrique specifique. Voir `vector_envelope.py` pour la
+    soudure vectorielle GENERIQUE qui remplace ce hack pour les sources
+    `.svg`."""
     if width_mm <= 0:
         raise ValueError("width_mm doit etre > 0.")
 
@@ -483,16 +484,6 @@ def extract_artwork_from_arrays(
         envelope_mask, width_mm, simplify_tolerance_ratio=_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO
     )
     warnings.extend(envelope_class_warnings)
-    if force_convex_envelope and envelope_polygon.is_valid and not envelope_polygon.is_empty:
-        import shapely
-
-        circle = shapely.minimum_bounding_circle(envelope_polygon)
-        if circle.geom_type == "Polygon" and circle.is_valid and not circle.is_empty:
-            envelope_polygon = circle
-            warnings.append(
-                "Enveloppe forcee au cercle englobant minimal (option activee) : le contour "
-                "ignore les meplats locaux du dessin source pour rester un cercle parfait."
-            )
     if envelope_polygon.is_valid and not envelope_polygon.is_empty:
         smoothed = _smooth_polygon_corners(envelope_polygon, _ENVELOPE_CHAIKIN_ITERATIONS)
         if smoothed.is_valid and not smoothed.is_empty:
@@ -531,12 +522,15 @@ def extract_artwork_from_image(
     min_component_area_ratio: float = _DEFAULT_INK_MIN_COMPONENT_AREA_RATIO,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
-    force_convex_envelope: bool = False,
 ) -> ArtworkExtractionResult:
-    """Point d'entree haut niveau : charge `image_path` (niveaux de gris
-    uniquement -- un dessin au trait n'a pas de canal alpha exploitable, le
-    canal alpha eventuel d'un PNG est ignore ici, contrairement au pipeline
-    silhouette) puis delegue a `extract_artwork_from_arrays`."""
+    """Point d'entree haut niveau RASTER : charge `image_path` (niveaux de
+    gris uniquement -- un dessin au trait n'a pas de canal alpha
+    exploitable, le canal alpha eventuel d'un PNG est ignore ici,
+    contrairement au pipeline silhouette) puis delegue a
+    `extract_artwork_from_arrays`. Pour une source `.svg`, voir
+    `extract_artwork_from_svg` -- ce point d'entree NE DOIT PAS recevoir un
+    `.svg` (aucune rasterisation de SVG dans ce pipeline, voir docstring de
+    module `image_lightbox_export.py`)."""
     from lithoshape3d.core.geometry.image_shape_extractor import load_image_for_extraction
 
     _alpha, gray = load_image_for_extraction(image_path)
@@ -548,5 +542,145 @@ def extract_artwork_from_image(
         min_component_area_ratio=min_component_area_ratio,
         closing_radius_px=closing_radius_px,
         max_closing_radius_px=max_closing_radius_px,
-        force_convex_envelope=force_convex_envelope,
     )
+
+
+def _fill_envelope_holes(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Retire tous les trous internes (`interiors`) d'un polygone/
+    MultiPolygon -- equivalent vectoriel EXACT du "fill-from-border" raster
+    (`_fill_enclosed_regions`, `ndimage.binary_fill_holes`) applique au
+    chemin PIXEL historique : ce ne sont pas les trous D'ENCRE (interieur
+    d'un "O", espace entre des doigts) qui doivent disparaitre de l'ink
+    fin -- ceux-la restent intacts sur `ink_polygon`, non touche ici -- mais
+    les zones ENFERMEES par l'encre unifiee/soudee qui, dans le corps
+    imprime, doivent devenir de la MATIERE (le mur/fond du caisson est un
+    disque PLEIN, pas une dentelle suivant chaque trait de texte).
+
+    Bug reel corrige (retour utilisateur avec capture) : sans cet appel,
+    `envelope_polygon` gardait de grands trous a l'emplacement de l'anneau
+    de texte/tirets decoratifs (le contour vectoriel des traits fins
+    n'entoure PAS une zone pleine par nature), et `vector_lightbox_
+    cap_footprint` (derive de cette enveloppe) heritait de ces memes trous
+    -- l'intersection avec `ink_polygon` pour le capot 2 couleurs melangeait
+    alors ces trous avec les vrais details du texte, deformant/fusionnant
+    des lettres entieres. Une SEULE fonction, appliquee une seule fois ici
+    (pas de duplication cote raster, qui a deja son propre `_fill_enclosed_
+    regions` equivalent pour son propre chemin pixel)."""
+    if geom.geom_type == "Polygon":
+        if not geom.interiors:
+            return geom
+        return Polygon(geom.exterior)
+    filled = [Polygon(g.exterior) if g.interiors else g for g in geom.geoms]
+    return MultiPolygon(filled) if len(filled) > 1 else filled[0]
+
+
+def extract_artwork_from_svg(
+    svg_path: str | Path,
+    width_mm: float,
+    *,
+    max_chord_error_mm: float | None = None,
+    weld_margin_ratio: float | None = None,
+) -> ArtworkExtractionResult:
+    """Pipeline artwork VECTORIEL pour une source `.svg` -- AUCUNE
+    rasterisation, contrairement a `extract_artwork_from_image` : reutilise
+    le meme moteur de parsing/tessellation que le mode `silhouette`
+    (`svg_path_extractor.extract_svg_components_from_svg`, une entree par
+    `<path>` d'origine), puis :
+
+      - `ink_polygon` = union simple de TOUS les composants -- la geometrie
+        vectorielle fidele au SVG source, SANS soudure (equivalent du
+        contour `silhouette` pour ce meme fichier) : detail fin pour le
+        capot 2 couleurs.
+      - `envelope_polygon` = soudure vectorielle GENERIQUE des composants
+        disjoints (`vector_envelope.weld_disjoint_components`) : relie les
+        elements physiquement disjoints du dessin (ex. tirets decoratifs,
+        poings ecartes d'un cercle) par la distance de soudure REELLEMENT
+        necessaire (mesuree, pas une heuristique), sans hack specifique a
+        une forme.
+
+    Retourne un `ArtworkExtractionResult` avec `ink_mask`/`envelope_mask`/
+    `threshold_used` a `None` (pas de masque pixel dans ce pipeline) et
+    `weld_distance_mm` renseigne."""
+    from lithoshape3d.core.geometry.svg_path_extractor import (
+        SvgPathExtractionError,
+        _DEFAULT_MAX_CHORD_ERROR_MM,
+        extract_svg_components_from_svg,
+    )
+    from lithoshape3d.core.geometry.vector_envelope import (
+        _DEFAULT_WELD_MARGIN_RATIO,
+        weld_disjoint_components,
+    )
+
+    if width_mm <= 0:
+        raise ValueError("width_mm doit etre > 0.")
+
+    effective_chord_error = (
+        max_chord_error_mm if max_chord_error_mm is not None else _DEFAULT_MAX_CHORD_ERROR_MM
+    )
+    effective_margin = weld_margin_ratio if weld_margin_ratio is not None else _DEFAULT_WELD_MARGIN_RATIO
+
+    try:
+        components_result = extract_svg_components_from_svg(
+            svg_path, width_mm, max_chord_error_mm=effective_chord_error
+        )
+    except SvgPathExtractionError as exc:
+        raise ArtworkExtractionError(str(exc)) from exc
+
+    warnings: list[str] = []
+    components = components_result.polygons
+
+    ink_polygon = components[0] if len(components) == 1 else unary_union_polygons(components)
+    if ink_polygon.is_empty or ink_polygon.area <= 0:
+        raise ArtworkExtractionError(
+            f"Encre degeneree (aire nulle) apres extraction vectorielle de : {svg_path}."
+        )
+
+    weld = weld_disjoint_components(components, margin_ratio=effective_margin)
+    warnings.extend(weld.warnings)
+    if weld.num_components_before > 1:
+        warnings.append(
+            f"Dessin en {weld.num_components_before} composante(s) vectorielle(s) disjointe(s) : "
+            f"soudure vectorielle (distance {weld.weld_distance_mm:.3f}mm) appliquee pour former un "
+            "seul caisson unifie."
+        )
+    # Ne comble les trous internes de l'enveloppe QUE si une soudure a
+    # reellement eu lieu (plusieurs composantes disjointes bridees) : dans ce
+    # cas, un trou est un artefact de l'assemblage (espace laisse entre des
+    # elements a l'origine separes -- tirets, texte en arc), pas une cavite
+    # dessinee intentionnellement. Si le dessin etait DEJA une seule
+    # composante (aucune soudure necessaire, ex. un vrai anneau/donut), ses
+    # trous existaient AVANT toute soudure -- ce sont de vraies
+    # caracteristiques du dessin, jamais comblees (regle generique, testee
+    # explicitement par `test_ring_artwork_envelope_does_not_fill_the_
+    # legitimate_hole`).
+    envelope_polygon = (
+        _fill_envelope_holes(weld.polygon) if weld.num_components_before > 1 else weld.polygon
+    )
+    if envelope_polygon.is_empty or envelope_polygon.area <= 0:
+        raise ArtworkExtractionError(
+            f"Enveloppe degeneree (aire nulle) apres soudure vectorielle de : {svg_path}."
+        )
+
+    return ArtworkExtractionResult(
+        envelope_polygon=envelope_polygon,
+        ink_polygon=ink_polygon,
+        width_mm=width_mm,
+        height_mm=components_result.height_mm,
+        ink_mask=None,
+        envelope_mask=None,
+        threshold_used=None,
+        closing_radius_px=0,
+        num_components_before_closing=weld.num_components_before,
+        num_components_after_closing=weld.num_components_after,
+        weld_distance_mm=weld.weld_distance_mm,
+        warnings=warnings,
+    )
+
+
+def unary_union_polygons(polygons):
+    """Petit alias local pour eviter d'importer `shapely.ops.unary_union`
+    sous deux noms differents dans ce module (deja utilise ailleurs sous son
+    nom d'origine dans `svg_path_extractor.py`)."""
+    from shapely.ops import unary_union
+
+    return unary_union(polygons)

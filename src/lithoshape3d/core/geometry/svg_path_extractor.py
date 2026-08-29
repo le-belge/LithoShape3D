@@ -262,27 +262,53 @@ def _local_tag(elem) -> str:
     return tag
 
 
+_BACKGROUND_FILL_VALUES = {"#fff", "#ffffff", "white", "none"}
+"""Valeurs de `fill` traitees comme "fond" (pas de la matiere) -- un `<path>`
+avec l'une de ces couleurs est exclu de l'extraction. Regle GENERIQUE (pas
+specifique a un fichier) : un export SVG standard (Illustrator, Inkscape...)
+dessine tres souvent un rectangle de fond blanc plein canevas comme PREMIER
+`<path>` du document (constate sur `cherry_moon.svg`, source Wikimedia
+Commons -- `<path fill="#fff" d="M0 0h192.756v192.756H0V0z"/>`) -- sans ce
+filtre, l'union de tous les `<path>` inclut ce rectangle de fond et le
+resultat degenere en simple rectangle (le fond, plus grand que tout le
+reste, domine `unary_union`). Coherent avec le reste du pipeline : le
+chemin raster (`image_shape_extractor.py`) traite deja le blanc/transparent
+comme "pas de matiere" (canal alpha ou seuillage par luminosite) -- cette
+regle applique le meme principe cote vectoriel, sans aucune dependance a la
+taille/position du chemin (donc pas un hack "si plein canevas")."""
+
+
+def _is_background_fill(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in _BACKGROUND_FILL_VALUES
+
+
 def _collect_paths_with_transforms(root) -> list[tuple[str, np.ndarray, str]]:
     """Parcourt l'arbre XML et retourne, pour chaque element `<path>`
-    exploitable, `(d_attr, cumulative_transform, fill_rule)` -- le transform
-    cumule inclut celui de tous les ancetres (groupes) ET celui porte par
-    l'element `<path>` lui-meme."""
+    exploitable ET dont le remplissage n'est pas du "fond" (voir
+    `_is_background_fill` -- blanc/`none`, herite des ancetres si non
+    surcharge, convention SVG standard), `(d_attr, cumulative_transform,
+    fill_rule)` -- le transform cumule inclut celui de tous les ancetres
+    (groupes) ET celui porte par l'element `<path>` lui-meme."""
     results: list[tuple[str, np.ndarray, str]] = []
 
-    def _walk(elem, inherited: np.ndarray) -> None:
+    def _walk(elem, inherited: np.ndarray, inherited_fill: str | None) -> None:
         own = _parse_transform_attr(elem.get("transform"))
         cumulative = inherited @ own
+        own_fill = elem.get("fill")
+        effective_fill = own_fill if own_fill is not None else inherited_fill
         tag = _local_tag(elem)
         if tag == "path":
             d_attr = elem.get("d")
-            if d_attr:
+            if d_attr and not _is_background_fill(effective_fill):
                 fill_rule = elem.get("fill-rule") or elem.get("clip-rule") or "nonzero"
                 results.append((d_attr, cumulative, fill_rule))
         for child in elem:
             if isinstance(_local_tag(child), str):
-                _walk(child, cumulative)
+                _walk(child, cumulative, effective_fill)
 
-    _walk(root, _IDENTITY.copy())
+    _walk(root, _IDENTITY.copy(), None)
     return results
 
 
@@ -303,7 +329,14 @@ def _repair_self_intersecting_ring(
     PLATS (exterieur(s) + trou(s) eventuels) -- `classify_contours_by_
     containment`, appelee ensuite par l'appelant, reclassera correctement
     ces anneaux par confinement geometrique (pas de duplication de cette
-    logique ici)."""
+    logique ici).
+
+    NOTE (nettoyage) : cette fonction etait auparavant definie DEUX FOIS
+    dans ce module (une premiere version ici, une seconde plus bas qui
+    "shadowait" silencieusement la premiere -- Python ne garde que la
+    derniere definition d'un nom de fonction dans un module). Les deux
+    versions etaient fonctionnellement equivalentes (meme algorithme
+    `buffer(0)`) ; seule celle-ci est conservee."""
     polygon = Polygon(ring)
     if polygon.is_valid and polygon.area > 0:
         return [ring]
@@ -323,22 +356,66 @@ def _repair_self_intersecting_ring(
     return rings_out
 
 
-def extract_polygon_from_svg(
+@dataclass
+class SvgComponentsResult:
+    """Resultat "composants" (non-unifie) de l'extraction vectorielle : une
+    entree par `<path>` d'origine, DEJA a l'echelle mm/Y-up mais PAS encore
+    combinee avec les autres. Consomme par `extract_polygon_from_svg` (union
+    simple, mode `silhouette`) ET par le calcul d'enveloppe soudee (mode
+    `artwork_envelope`, voir `vector_envelope.py`) -- les DEUX modes
+    partagent ainsi le meme moteur de parsing/tessellation, seule l'etape de
+    COMBINAISON finale differe."""
+
+    polygons: list[Polygon | MultiPolygon]
+    """Un element par `<path>` XML d'origine (dans l'ordre du document),
+    deja repare (`buffer(0)`) et avec sa propre regle de remplissage
+    appliquee -- voir docstring de `extract_svg_components_from_svg`."""
+    width_mm: float
+    height_mm: float
+
+
+def _fill_rule_of(fill_rule: str) -> str:
+    normalized = (fill_rule or "nonzero").strip().lower()
+    return "evenodd" if normalized == "evenodd" else "nonzero"
+
+
+def extract_svg_components_from_svg(
     svg_path: str | Path,
     width_mm: float,
     *,
     max_chord_error_mm: float = _DEFAULT_MAX_CHORD_ERROR_MM,
-) -> tuple[Polygon | MultiPolygon, float]:
-    """Point d'entree haut niveau : parse `svg_path`, extrait TOUS les
-    `<path>` (avec leurs transforms de groupe cumules), les tessellle par
-    subdivision adaptative (erreur de corde <= `max_chord_error_mm` UNE FOIS
-    mis a l'echelle physique `width_mm`), les combine en un seul polygone/
-    MultiPolygon Shapely par confinement geometrique, puis retourne
-    `(polygon_mm, height_mm)`.
+) -> SvgComponentsResult:
+    """Coeur du parsing/tessellation vectoriel, PARTAGE par `silhouette` et
+    `artwork_envelope` (voir `SvgComponentsResult`) : parse `svg_path`,
+    extrait TOUS les `<path>` (avec leurs transforms de groupe cumules), les
+    tessellle par subdivision adaptative (erreur de corde <=
+    `max_chord_error_mm` UNE FOIS mis a l'echelle physique `width_mm`), puis
+    retourne UN polygone/MultiPolygon par `<path>` d'origine -- SANS les
+    combiner entre eux (l'appelant decide comment : union simple pour
+    `silhouette`, soudure geometrique controlee pour `artwork_envelope`).
+
+    Regle de remplissage (`fill-rule`, lue depuis le XML) :
+      - `evenodd` : geree PRECISEMENT -- les sous-chemins d'un MEME `<path>`
+        sont combines par difference symetrique (XOR) via shapely
+        (`reduce(symmetric_difference, ...)`), ce qui reproduit exactement
+        la semantique "parite de croisements" d'`evenodd` pour ce `<path>`,
+        y compris des trous imbriques sur plusieurs niveaux.
+      - `nonzero` (par defaut, cas le plus frequent) : chaque sous-chemin de
+        CE `<path>` est repare individuellement (`_repair_self_intersecting_
+        ring`) et laisse "plat" (ni exterieur ni trou impose) -- la
+        classification exterieur/trou entre CES rings et ceux des AUTRES
+        `<path>` `nonzero` du document reste faite par CONFINEMENT
+        GEOMETRIQUE (`classify_contours_by_containment`), une approximation
+        documentee de la vraie regle `nonzero` (comptage de direction de
+        croisement) qui donne le resultat attendu pour l'immense majorite
+        des logos/silhouettes sans auto-intersection complexe. LIMITATION
+        CONNUE, non resolue par cette fonction : un `<path>` `nonzero`
+        auto-intersectant dont le rendu correct depend precisement du sens
+        de parcours (winding) peut differer du rendu navigateur -- cas rare
+        pour les logos/silhouettes vises par ce pipeline.
 
     Leve `SvgPathExtractionError` si le fichier est illisible, vide, sans
-    `<path>` exploitable, ou si la silhouette resultante est degeneree
-    (aire nulle)."""
+    `<path>` exploitable, ou si un composant est degenere (aire nulle)."""
     if width_mm <= 0:
         raise ValueError("width_mm doit etre > 0.")
     if max_chord_error_mm <= 0:
@@ -355,15 +432,15 @@ def extract_polygon_from_svg(
     if not raw_paths:
         raise SvgPathExtractionError(f"Aucun element <path> exploitable dans : {svg_path}.")
 
-    parsed: list[tuple[object, np.ndarray]] = []
-    for d_attr, transform, _fill_rule in raw_paths:
+    parsed: list[tuple[object, np.ndarray, str]] = []
+    for d_attr, transform, fill_rule in raw_paths:
         try:
             path_obj = parse_path(d_attr)
         except Exception as exc:
             raise SvgPathExtractionError(f"Chemin SVG invalide (d=\"{d_attr[:60]}...\") : {exc}") from exc
         if len(path_obj) == 0:
             continue
-        parsed.append((path_obj, transform))
+        parsed.append((path_obj, transform, _fill_rule_of(fill_rule)))
 
     if not parsed:
         raise SvgPathExtractionError(f"Tous les <path> de {svg_path} sont vides.")
@@ -375,7 +452,7 @@ def extract_polygon_from_svg(
     # subdivision efficace des le premier passage).
     ctrl_minx = ctrl_miny = math.inf
     ctrl_maxx = ctrl_maxy = -math.inf
-    for path_obj, transform in parsed:
+    for path_obj, transform, _fill_rule in parsed:
         for segment in path_obj:
             for z in _segment_control_points(segment):
                 x, y = _apply_matrix(transform, z.real, z.imag)
@@ -391,18 +468,22 @@ def extract_polygon_from_svg(
     tol_user_units = max_chord_error_mm / scale_estimate
 
     # Passe 2 : tessellation adaptative reelle (unites document SVG, apres
-    # transforms de groupe, AVANT mise a l'echelle mm finale).
-    all_rings: list[list[tuple[float, float]]] = []
-    for path_obj, transform in parsed:
-        all_rings.extend(_tessellate_path(path_obj, transform, tol_user_units))
+    # transforms de groupe, AVANT mise a l'echelle mm finale) -- un groupe de
+    # rings PAR <path> d'origine (pas encore aplati/fusionne entre <path>).
+    per_path_rings: list[tuple[list[list[tuple[float, float]]], str]] = []
+    for path_obj, transform, fill_rule in parsed:
+        rings = _tessellate_path(path_obj, transform, tol_user_units)
+        if rings:
+            per_path_rings.append((rings, fill_rule))
 
-    if not all_rings:
+    if not per_path_rings:
         raise SvgPathExtractionError(f"Aucun contour ferme exploitable dans : {svg_path}.")
 
-    minx = min(x for ring in all_rings for x, _ in ring)
-    maxx = max(x for ring in all_rings for x, _ in ring)
-    miny = min(y for ring in all_rings for _, y in ring)
-    maxy = max(y for ring in all_rings for _, y in ring)
+    all_points = [pt for rings, _fr in per_path_rings for ring in rings for pt in ring]
+    minx = min(x for x, _ in all_points)
+    maxx = max(x for x, _ in all_points)
+    miny = min(y for _, y in all_points)
+    maxy = max(y for _, y in all_points)
     bbox_width = maxx - minx
     if bbox_width <= 0:
         raise SvgPathExtractionError(
@@ -411,24 +492,80 @@ def extract_polygon_from_svg(
     exact_scale = width_mm / bbox_width
     height_mm = (maxy - miny) * exact_scale
 
-    # Mise a l'echelle finale + passage en convention Y-up origine bas-gauche
-    # (SVG est Y-down origine haut-gauche) -- meme convention que
-    # `image_shape_extractor.mask_to_polygon` / `LetterGlyph.to_shapely()`.
-    contours_mm: list[list[tuple[float, float]]] = []
-    for ring in all_rings:
-        contour_mm = [
-            ((x - minx) * exact_scale, (maxy - y) * exact_scale) for x, y in ring
-        ]
-        contours_mm.extend(_repair_self_intersecting_ring(contour_mm))
+    def _to_mm(ring: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        # Mise a l'echelle finale + passage en convention Y-up origine
+        # bas-gauche (SVG est Y-down origine haut-gauche) -- meme convention
+        # que `image_shape_extractor.mask_to_polygon` / `LetterGlyph.to_shapely()`.
+        return [((x - minx) * exact_scale, (maxy - y) * exact_scale) for x, y in ring]
 
-    try:
-        parts, warnings = classify_contours_by_containment(
-            contours_mm, touching_hole_note="extraction SVG vectorielle"
+    nonzero_flat_rings: list[list[tuple[float, float]]] = []
+    evenodd_polygons: list[Polygon | MultiPolygon] = []
+    # Association ordonnee composant -> polygone final, pour reconstituer un
+    # resultat PAR <path> (voir docstring `SvgComponentsResult`) : les
+    # <path> nonzero sont classes ENSEMBLE (confinement geometrique
+    # partage entre eux, approximation documentee), donc regroupes en un
+    # seul "pseudo-composant" a la fin ; chaque <path> evenodd reste son
+    # propre composant (XOR interne exact, independant des autres <path>).
+    nonzero_present = False
+    for rings, fill_rule in per_path_rings:
+        rings_mm = [_to_mm(ring) for ring in rings]
+        if fill_rule == "evenodd":
+            polys = [Polygon(r) for r in rings_mm if len(r) >= 3]
+            polys = [p.buffer(0) if not p.is_valid else p for p in polys]
+            polys = [p for p in polys if not p.is_empty and p.area > 0]
+            if not polys:
+                continue
+            combined = polys[0]
+            for p in polys[1:]:
+                combined = combined.symmetric_difference(p)
+            if not combined.is_empty and combined.area > 0:
+                evenodd_polygons.append(combined)
+        else:
+            nonzero_present = True
+            for ring in rings_mm:
+                nonzero_flat_rings.extend(_repair_self_intersecting_ring(ring))
+
+    components: list[Polygon | MultiPolygon] = []
+    if nonzero_present and nonzero_flat_rings:
+        try:
+            parts, _warnings = classify_contours_by_containment(
+                nonzero_flat_rings, touching_hole_note="extraction SVG vectorielle"
+            )
+        except ContourClassificationError as exc:
+            raise SvgPathExtractionError(str(exc)) from exc
+        nonzero_polygons = [part.to_shapely() for part in parts]
+        nonzero_polygons = [p for p in nonzero_polygons if not p.is_empty and p.area > 0]
+        components.extend(nonzero_polygons)
+    components.extend(evenodd_polygons)
+
+    if not components:
+        raise SvgPathExtractionError(
+            f"Silhouette degeneree (aire nulle) apres extraction vectorielle de : {svg_path}."
         )
-    except ContourClassificationError as exc:
-        raise SvgPathExtractionError(str(exc)) from exc
 
-    polygons = [part.to_shapely() for part in parts]
+    return SvgComponentsResult(polygons=components, width_mm=width_mm, height_mm=height_mm)
+
+
+def extract_polygon_from_svg(
+    svg_path: str | Path,
+    width_mm: float,
+    *,
+    max_chord_error_mm: float = _DEFAULT_MAX_CHORD_ERROR_MM,
+) -> tuple[Polygon | MultiPolygon, float]:
+    """Point d'entree haut niveau MODE `silhouette` : appelle
+    `extract_svg_components_from_svg` (moteur de parsing/tessellation
+    PARTAGE avec le mode `artwork_envelope`, voir `vector_envelope.py`) puis
+    combine tous les composants par simple UNION geometrique -- aucune
+    soudure/buffer, un `<path>` disjoint des autres reste disjoint dans le
+    resultat (comportement historique inchange pour ce mode).
+
+    Retourne `(polygon_mm, height_mm)`. Leve `SvgPathExtractionError` si le
+    fichier est illisible, vide, sans `<path>` exploitable, ou si la
+    silhouette resultante est degeneree (aire nulle)."""
+    result = extract_svg_components_from_svg(
+        svg_path, width_mm, max_chord_error_mm=max_chord_error_mm
+    )
+    polygons = result.polygons
     polygon = polygons[0] if len(polygons) == 1 else unary_union(polygons)
 
     if polygon.is_empty or polygon.area <= 0:
@@ -436,7 +573,7 @@ def extract_polygon_from_svg(
             f"Silhouette degeneree (aire nulle) apres extraction vectorielle de : {svg_path}."
         )
 
-    return polygon, height_mm
+    return polygon, result.height_mm
 
 
 def extract_svg_polygon_result(
@@ -454,38 +591,6 @@ def extract_svg_polygon_result(
         svg_path, width_mm, max_chord_error_mm=max_chord_error_mm
     )
     return SvgPolygonResult(polygon=polygon, width_mm=width_mm, height_mm=height_mm, warnings=[])
-
-
-def _repair_self_intersecting_ring(ring: list[tuple[float, float]]) -> list[list[tuple[float, float]]]:
-    """Un chemin SVG tessellee peut etre auto-intersectant (bowtie) : le
-    contour source ne comporte pas toujours de commande `Z` explicite (un
-    viewer SVG ferme implicitement par une droite pour le remplissage, ce
-    qui suffit parfois a introduire un croisement), ou l'artiste a dessine
-    intentionnellement un contour auto-croise en s'appuyant sur la regle de
-    remplissage (`nonzero`/`evenodd`) pour resoudre le rendu final -- cas
-    observe sur `Tesla_T_symbol.svg`. `Polygon(ring)` serait alors invalide
-    au sens OGC et simplement ignore par `classify_contours_by_containment`
-    (perte de matiere silencieuse). Reparation standard : `buffer(0)`, qui
-    resout le croisement en un ou plusieurs polygones valides -- chaque
-    polygone resultant (et ses eventuels trous) redevient un anneau exploi-
-    table par la classification par confinement en aval."""
-    poly = Polygon(ring)
-    if poly.is_valid and poly.area > 0:
-        return [ring]
-
-    repaired = poly.buffer(0)
-    if repaired.is_empty:
-        return []
-
-    pieces = list(repaired.geoms) if repaired.geom_type == "MultiPolygon" else [repaired]
-    rings: list[list[tuple[float, float]]] = []
-    for piece in pieces:
-        if piece.area <= 0:
-            continue
-        rings.append(list(piece.exterior.coords))
-        for interior in piece.interiors:
-            rings.append(list(interior.coords))
-    return rings
 
 
 def _segment_control_points(segment):
