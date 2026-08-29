@@ -502,6 +502,10 @@ def extract_artwork_from_arrays(
         ink_mask, width_mm, simplify_tolerance_ratio=_INK_SIMPLIFY_TOLERANCE_RATIO
     )
     warnings.extend(ink_class_warnings)
+    if ink_polygon.is_valid and not ink_polygon.is_empty:
+        smoothed_ink = _smooth_polygon_corners(ink_polygon, _ENVELOPE_CHAIKIN_ITERATIONS)
+        if smoothed_ink.is_valid and not smoothed_ink.is_empty:
+            ink_polygon = smoothed_ink
 
     return ArtworkExtractionResult(
         envelope_polygon=envelope_polygon,
