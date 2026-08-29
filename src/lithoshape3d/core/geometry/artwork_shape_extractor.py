@@ -58,20 +58,16 @@ fine que le Cas A (logo alpha propre, 0.004) et le Cas B photo (0.008) --
 le capot 2 couleurs doit rester fidele au trait, c'est tout l'interet de ce
 mode par rapport a une silhouette globale."""
 
-_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO = 0.002
+_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO = 0.0003
 """Tolerance de simplification de l'enveloppe (corps/fond du caisson).
-Abaissee de 0.006 a 0.002 (retour utilisateur "cercle a ~20 cotes, tres
-facete" -- une simplification par rapport au PERIMETRE, comme ici, retrecit
-tres vite le nombre de sommets d'un contour proche d'un cercle). 0.002 garde
-un contour nettement plus lisse (plusieurs dizaines de sommets sur un cercle
-de taille typique) sans repartir sur un nombre de sommets demesure -- valeur
-choisie apres verification visuelle sur le cas Cherry Moon (voir
-`examples/physical_validation/cherry_moon_source/qualite_corps_apres_fix.png`),
-pas seulement sur un comptage de sommets. Desormais plus fine que l'encre
-(`_INK_SIMPLIFY_TOLERANCE_RATIO` = 0.003) : l'enveloppe est le contour EXTRUDE
-du corps, c'est elle qui doit rester lisse a l'oeil sur une grande surface
-extrudee, alors que l'encre reste un motif plat 2D ou une legere facette est
-moins visible."""
+Deuxieme abaissement (0.002 -> 0.0003) : le premier passage a 0.002 restait
+insuffisant sur un contour a grands arcs doux (logo Tesla T, grandes courbes
+en aile) -- seulement ~20-26 sommets sur tout le contour, arcs clairement
+factes/segmentes (retour utilisateur direct sur ce cas). Verifie par balayage
+visuel (0.002/0.0008/0.0003/0.0001) sur ce meme cas : 0.0003 (~45 sommets sur
+le contour complet) donne des arcs visuellement lisses sans repartir sur un
+nombre de sommets demesure (0.0001 n'apporte plus de gain visible). Toujours
+verifie sans regression sur Cherry Moon et Circuit Foil (silhouette)."""
 
 _DEFAULT_MAX_CLOSING_RADIUS_RATIO = 0.06
 """Plafond par defaut de recherche de rayon de fermeture, en fraction de la
@@ -126,6 +122,62 @@ _NOTCH_SMOOTHING_MAX_RADIUS_PX = 400
 l'image) : evite un cout de calcul demesure sur une tres grande image de
 travail ou `max_radius * _NOTCH_SMOOTHING_RADIUS_MULTIPLIER` deviendrait
 enorme."""
+
+_ENVELOPE_CHAIKIN_ITERATIONS = 2
+"""Nombre d'iterations de lissage de coins (Chaikin) applique au contour de
+l'ENVELOPPE apres simplification -- retour utilisateur direct : sur un
+contour a grands arcs doux (logo Tesla T), meme un `approxPolyDP` tres fin
+reste visiblement facete/segmente (l'ecart entre epsilon=1px, ~48 sommets,
+trop grossier, et epsilon=0.5px, ~850 sommets, qui ne fait que recopier le
+crenelage pixel du raster sans etre plus lisse, ne laisse aucun compromis
+de simplification satisfaisant). Chaikin (coupe de coins recursive, purement
+2D sur le CONTOUR avant extrusion -- ne touche jamais la triangulation 3D,
+contrairement a la subdivision de maillage retiree precedemment pour cause
+de jonctions en "T"/fissures) arrondit reellement les arcs sans reintroduire
+le crenelage pixel. 2 iterations (verifie visuellement) suffisent a lisser
+sans faire exploser le nombre de sommets (45 -> ~180) ni arrondir a l'exces
+des coins qui doivent rester nets (angles voulus du dessin)."""
+
+
+def _chaikin_smooth_ring(coords: list[tuple[float, float]], iterations: int) -> list[tuple[float, float]]:
+    """Lissage de coins de Chaikin sur un anneau FERME (`coords[0] ==
+    coords[-1]`, convention Shapely) : a chaque iteration, chaque arete
+    `(P0,P1)` est remplacee par deux points `Q=0.75*P0+0.25*P1` et
+    `R=0.25*P0+0.75*P1`, coupant chaque coin en un petit segment -- effet
+    d'arrondi progressif et stable (contrairement a un lissage par moyenne
+    glissante, ne peut jamais faire sortir le contour de l'enveloppe convexe
+    locale de ses points d'origine, donc ne peut pas introduire d'auto-
+    intersection nouvelle sur un polygone deja simple)."""
+    if iterations <= 0 or len(coords) < 4:
+        return coords
+    pts = np.asarray(coords[:-1], dtype=np.float64)
+    for _ in range(iterations):
+        p0 = pts
+        p1 = np.roll(pts, -1, axis=0)
+        q = 0.75 * p0 + 0.25 * p1
+        r = 0.25 * p0 + 0.75 * p1
+        pts = np.empty((len(p0) * 2, 2), dtype=np.float64)
+        pts[0::2] = q
+        pts[1::2] = r
+    return [tuple(p) for p in pts] + [tuple(pts[0])]
+
+
+def _smooth_polygon_corners(geom: Polygon | MultiPolygon, iterations: int) -> Polygon | MultiPolygon:
+    """Applique `_chaikin_smooth_ring` a l'exterieur ET a chaque trou d'un
+    `Polygon`/`MultiPolygon` -- garde les trous lisses au meme titre que le
+    contour exterieur (sinon un contour exterieur arrondi avec des trous
+    encore factes serait incoherent visuellement)."""
+    if iterations <= 0:
+        return geom
+
+    def smooth_one(poly: Polygon) -> Polygon:
+        exterior = _chaikin_smooth_ring(list(poly.exterior.coords), iterations)
+        interiors = [_chaikin_smooth_ring(list(ring.coords), iterations) for ring in poly.interiors]
+        return Polygon(exterior, interiors)
+
+    if geom.geom_type == "Polygon":
+        return smooth_one(geom)
+    return MultiPolygon([smooth_one(p) for p in geom.geoms])
 
 
 class ArtworkExtractionError(ImageShapeExtractionError):
@@ -409,6 +461,10 @@ def extract_artwork_from_arrays(
         envelope_mask, width_mm, simplify_tolerance_ratio=_ENVELOPE_SIMPLIFY_TOLERANCE_RATIO
     )
     warnings.extend(envelope_class_warnings)
+    if envelope_polygon.is_valid and not envelope_polygon.is_empty:
+        smoothed = _smooth_polygon_corners(envelope_polygon, _ENVELOPE_CHAIKIN_ITERATIONS)
+        if smoothed.is_valid and not smoothed.is_empty:
+            envelope_polygon = smoothed
 
     ink_polygon, _ink_height_mm, ink_class_warnings = mask_to_polygon(
         ink_mask, width_mm, simplify_tolerance_ratio=_INK_SIMPLIFY_TOLERANCE_RATIO
