@@ -12,6 +12,25 @@ tâche de développement (voir `docs/02_IDEA_PARKING.md` et les règles de
 proposition à confronter entre Mike, ChatGPT et Claude avant toute
 nouvelle mission de développement.
 
+## Amendement LithoLab — 2026-08-29
+
+Le projet LithoLab ajoute une nouvelle direction produit : utiliser les
+tests publics de lithophanie pour nourrir LithoShape3D avec des fonctions
+concrètes d'aide à la réussite d'impression.
+
+Document de cadrage dédié : `docs/08_LITHOLAB_FEATURES.md`.
+
+Décision de principe :
+
+- LithoShape3D peut intégrer des fonctions issues de LithoLab si elles
+  améliorent directement la génération, la prévisualisation, le diagnostic
+  ou la documentation d'un objet imprimable.
+- La connexion directe au capteur LithoMeter, la base communautaire et les
+  simulations physiques avancées restent hors scope immédiat.
+- Le premier pont concret recommandé est un preset "Benchmark opacité
+  LithoLab V1" générant une éprouvette de transmission lumineuse à 7
+  épaisseurs.
+
 ## 0.4.x — Stabilisation *(en cours)*
 
 - [x] Material Only — livré 0.4.1, invariance de géométrie prouvée par test.
@@ -49,6 +68,12 @@ printability.py` fait déjà une partie de ce travail (composantes
 disjointes, dimensions, éléments fins détectés par érosion) — 0.5 est une
 extension de cette API existante, pas un nouveau module isolé.
 
+Ajout LithoLab proposé : produire un rapport d'impression simple
+résumant dimensions, épaisseurs, orientation, avertissements, conseils
+slicer et paramètres recommandés. Ce rapport prépare les futures vidéos
+LithoLab et aide l'utilisateur à comprendre pourquoi un réglage est
+conseillé.
+
 ## 0.6 — Image & Light Intelligence
 
 - Optimisation photo pour lithophanie (contraste/luminosité/détails,
@@ -58,6 +83,16 @@ extension de cette API existante, pas un nouveau module isolé.
   rétro-éclairé) — **prérequis direct** : Backlight Insert doit être sorti
   de son statut EXPERIMENTAL avant que cette calibration ait un sens
   (calibrer un phénomène jamais observé physiquement n'est pas possible).
+
+Ajouts LithoLab proposés :
+
+- assistant photo : contraste, visage trop petit, image trop sombre,
+  arrière-plan trop chargé, détails menacés ;
+- preview rétroéclairé amélioré : lumière chaude/froide, zones bouchées,
+  zones trop transparentes, comparaison avant/après réglage ;
+- preset "Benchmark opacité LithoLab V1" : génération d'une éprouvette à
+  7 épaisseurs pour mesurer la LithoCurve d'un filament imprimé ;
+- calibration filament manuelle, sans connexion obligatoire au capteur.
 
 ## 0.7 — Productization
 
