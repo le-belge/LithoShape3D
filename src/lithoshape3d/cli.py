@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     lightbox = subparsers.add_parser(
         "lightbox-text",
-        help="Genere un caisson texte avec facade lithophanie en STL separes",
+        help="Genere un caisson texte avec fond integre et facade lithophanie",
     )
     lightbox.add_argument("input", help="Image source de lithophanie (PNG/JPG)")
     lightbox.add_argument("output_dir", help="Dossier de sortie des STL")
@@ -47,8 +47,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     lightbox.add_argument("--depth", type=float, default=35.0, help="Profondeur du caisson en mm")
     lightbox.add_argument("--wall-thickness", type=float, default=2.0, help="Epaisseur des parois")
-    lightbox.add_argument("--back-thickness", type=float, default=1.2, help="Epaisseur du fond")
-    lightbox.add_argument("--no-back-panel", action="store_true", help="Ne pas generer de fond")
+    lightbox.add_argument("--back-thickness", type=float, default=1.2, help="Epaisseur du fond integre")
+    lightbox.add_argument(
+        "--separate-back-panel",
+        action="store_true",
+        help="Genere le fond en STL separe au lieu de l'integrer au corps",
+    )
     lightbox.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
     lightbox.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
     lightbox.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
@@ -172,6 +176,85 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Plafond de la recherche automatique de rayon de fermeture (mode artwork-envelope).",
     )
 
+    shape_lightbox = subparsers.add_parser(
+        "lightbox-shape",
+        help="Genere un caisson LightBox depuis une silhouette image ou SVG",
+    )
+    shape_lightbox.add_argument("shape", help="Silhouette source (SVG/PNG/JPG/BMP)")
+    shape_lightbox.add_argument("output_dir", help="Dossier de sortie des STL")
+    shape_lightbox.add_argument("--width", type=float, required=True, help="Largeur en mm")
+    shape_lightbox.add_argument(
+        "--height",
+        type=float,
+        required=True,
+        help="Hauteur en mm de la LightBox",
+    )
+    shape_lightbox.add_argument("--depth", type=float, default=35.0, help="Profondeur du caisson")
+    shape_lightbox.add_argument("--wall-thickness", type=float, default=2.0, help="Epaisseur des parois")
+    shape_lightbox.add_argument(
+        "--back-thickness",
+        type=float,
+        default=1.2,
+        help="Epaisseur du fond integre",
+    )
+    shape_lightbox.add_argument(
+        "--separate-back-panel",
+        action="store_true",
+        help="Genere le fond en STL separe au lieu de l'integrer au corps",
+    )
+    shape_lightbox.add_argument(
+        "--face",
+        choices=("solid", "lithophane", "open"),
+        default="solid",
+        help="Type de facade : capot plat, lithophanie ou ouverte",
+    )
+    shape_lightbox.add_argument(
+        "--lithophane-image",
+        default=None,
+        help="Image source de la facade lithophanie si --face lithophane",
+    )
+    shape_lightbox.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
+    shape_lightbox.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
+    shape_lightbox.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
+    shape_lightbox.add_argument("--invert", action="store_true", default=_GP_DEFAULTS["invert"])
+    shape_lightbox.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Seuil silhouette pour images sans alpha (0.0-1.0)",
+    )
+
+    opacity_coupon = subparsers.add_parser(
+        "opacity-coupon",
+        help="Genere le coupon benchmark opacite LithoLab V1",
+    )
+    opacity_coupon.add_argument(
+        "output",
+        nargs="?",
+        default="LithoLab_Opacity_Coupon_V1.stl",
+        help="Fichier STL de sortie",
+    )
+    opacity_coupon.add_argument("--width", type=float, default=100.0, help="Largeur en mm")
+    opacity_coupon.add_argument("--height", type=float, default=30.0, help="Hauteur en mm")
+    opacity_coupon.add_argument(
+        "--resolution",
+        type=float,
+        default=0.5,
+        help="Pas de grille en mm",
+    )
+    opacity_coupon.add_argument(
+        "--thicknesses",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Epaisseurs en mm, ex: --thicknesses 0.6 0.8 1.0 1.5 2.0 2.5 3.0",
+    )
+    opacity_coupon.add_argument(
+        "--no-labels",
+        action="store_true",
+        help="Desactive les labels d'epaisseur en relief",
+    )
+
     return parser
 
 
@@ -244,7 +327,7 @@ def _cmd_lightbox_text(args: argparse.Namespace) -> int:
         depth_mm=args.depth,
         wall_thickness_mm=args.wall_thickness,
         back_panel_thickness_mm=args.back_thickness,
-        include_back_panel=not args.no_back_panel,
+        include_back_panel=args.separate_back_panel,
     )
     result = build_text_lightbox(
         args.text,
@@ -418,6 +501,149 @@ def _cmd_lightbox_image(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shape_mask_from_path(path: str | Path, params: GeometryParameters, threshold: float):
+    import numpy as np
+    from PIL import Image
+
+    from lithoshape3d.core.geometry.heightmap import grid_dimensions
+    from lithoshape3d.core.geometry.shape import build_shape_mask_from_image_array
+    from lithoshape3d.core.image.preprocessing import resize_array
+
+    path = Path(path)
+    image_path = path
+    if path.suffix.lower() == ".svg":
+        try:
+            from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
+        except ImportError as exc:
+            raise RuntimeError(
+                "L'import SVG direct utilise QtSvg. Installez LithoShape3D avec "
+                "`pip install -e \".[app]\"` ou rasterisez le SVG en PNG."
+            ) from exc
+        image_path = Path(rasterize_svg_to_alpha_png(str(path)))
+
+    rows, cols = grid_dimensions(params)
+    with Image.open(image_path) as image:
+        has_alpha = "A" in image.getbands()
+        if has_alpha:
+            channel = np.asarray(image.split()[-1], dtype=np.float32) / 255.0
+        else:
+            channel = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+
+    if not has_alpha and threshold != 0.5:
+        resized = resize_array(channel, width_px=cols, height_px=rows)
+        return resized >= threshold
+    mask = build_shape_mask_from_image_array(channel, rows, cols)
+    return mask
+
+
+def _cmd_lightbox_shape(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.export.stl_export import export_stl
+    from lithoshape3d.core.geometry.lightbox import (
+        LightBoxFaceMode,
+        LightBoxParameters,
+        build_lightbox_from_shape_mask,
+    )
+    from lithoshape3d.core.validation.mesh_checks import validate_mesh
+
+    face_mode = {
+        "solid": LightBoxFaceMode.SOLID,
+        "lithophane": LightBoxFaceMode.LITHOPHANE,
+        "open": LightBoxFaceMode.OPEN,
+    }[args.face]
+    if face_mode is LightBoxFaceMode.LITHOPHANE and not args.lithophane_image:
+        print("ECHEC: --lithophane-image est requis avec --face lithophane")
+        return 1
+
+    face_params = GeometryParameters(
+        width_mm=args.width,
+        height_mm=args.height,
+        min_thickness_mm=args.min_thickness,
+        max_thickness_mm=args.max_thickness,
+        invert=args.invert,
+        resolution=args.resolution,
+    )
+    box_params = LightBoxParameters(
+        depth_mm=args.depth,
+        wall_thickness_mm=args.wall_thickness,
+        back_panel_thickness_mm=args.back_thickness,
+        include_back_panel=args.separate_back_panel,
+        face_mode=face_mode,
+    )
+
+    try:
+        shape_mask = _shape_mask_from_path(args.shape, face_params, args.threshold)
+        result = build_lightbox_from_shape_mask(
+            shape_mask,
+            face_params,
+            box_params,
+            image_path=args.lithophane_image,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        print(f"ECHEC: {exc}")
+        return 1
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[Path] = []
+    for name, mesh in result.as_meshes().items():
+        validation = validate_mesh(mesh)
+        if not validation.is_valid:
+            print(f"ECHEC validation {name} :", ", ".join(validation.issues()))
+            return 1
+        path = output_dir / f"lightbox_{name}.stl"
+        export_stl(mesh, path)
+        written.append(path)
+
+    for warning in result.warnings:
+        print(f"AVERTISSEMENT: {warning}")
+    print("OK:", ", ".join(str(path) for path in written))
+    return 0
+
+
+def _cmd_opacity_coupon(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.export.stl_export import export_stl
+    from lithoshape3d.core.geometry.opacity_coupon import (
+        DEFAULT_LITHOLAB_OPACITY_THICKNESSES_MM,
+        OpacityCouponParameters,
+        build_opacity_coupon_mesh,
+    )
+    from lithoshape3d.core.validation.mesh_checks import validate_mesh
+
+    thicknesses = (
+        tuple(args.thicknesses)
+        if args.thicknesses is not None
+        else DEFAULT_LITHOLAB_OPACITY_THICKNESSES_MM
+    )
+    try:
+        params = OpacityCouponParameters(
+            width_mm=args.width,
+            height_mm=args.height,
+            resolution_mm=args.resolution,
+            thicknesses_mm=thicknesses,
+            labels=not args.no_labels,
+        )
+        mesh = build_opacity_coupon_mesh(params)
+    except ValueError as exc:
+        print(f"ECHEC: {exc}")
+        return 1
+
+    validation = validate_mesh(mesh)
+    if not validation.is_valid:
+        print("ECHEC validation du coupon :", ", ".join(validation.issues()))
+        return 1
+
+    output = Path(args.output)
+    export_stl(mesh, output)
+    print(
+        f"OK: {output} "
+        f"({len(mesh.vertices)} sommets, {len(mesh.faces)} faces, "
+        f"volume={validation.volume_mm3:.1f} mm3)"
+    )
+    print("Epaisseurs:", ", ".join(f"{value:g} mm" for value in thicknesses))
+    return 0
+
+
 def _cmd_launch_app() -> int:
     from lithoshape3d.ui.app import run_app
 
@@ -439,6 +665,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_lightbox_letters(args)
     if args.command == "lightbox-image":
         return _cmd_lightbox_image(args)
+    if args.command == "lightbox-shape":
+        return _cmd_lightbox_shape(args)
+    if args.command == "opacity-coupon":
+        return _cmd_opacity_coupon(args)
 
     return _cmd_launch_app()
 

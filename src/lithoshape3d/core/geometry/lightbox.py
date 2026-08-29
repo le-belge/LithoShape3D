@@ -42,7 +42,7 @@ class LightBoxParameters:
     depth_mm: float = 35.0
     wall_thickness_mm: float = 2.0
     back_panel_thickness_mm: float = 1.2
-    include_back_panel: bool = True
+    include_back_panel: bool = False
     face_mode: LightBoxFaceMode = LightBoxFaceMode.LITHOPHANE
     solid_face_thickness_mm: float = 1.2
 
@@ -72,8 +72,8 @@ def _validate_box_params(face_params: GeometryParameters, box_params: LightBoxPa
         raise ValueError("La profondeur du caisson doit etre > 0.")
     if box_params.wall_thickness_mm <= 0:
         raise ValueError("L'epaisseur de paroi doit etre > 0.")
-    if box_params.include_back_panel and box_params.back_panel_thickness_mm <= 0:
-        raise ValueError("L'epaisseur du fond doit etre > 0 si le fond est active.")
+    if box_params.back_panel_thickness_mm <= 0:
+        raise ValueError("L'epaisseur du fond doit etre > 0.")
     if box_params.face_mode is LightBoxFaceMode.SOLID and box_params.solid_face_thickness_mm <= 0:
         raise ValueError("L'epaisseur de facade pleine doit etre > 0.")
 
@@ -119,7 +119,7 @@ def build_lightbox_body_mesh(
     face_params: GeometryParameters,
     box_params: LightBoxParameters,
 ) -> tuple[trimesh.Trimesh, list[str]]:
-    """Construit uniquement les parois du caisson, sans fond ni facade.
+    """Construit le corps du caisson, avec fond integre par defaut.
 
     `shape_mask` suit la convention image/Shape Composer. La fonction le
     retourne en Y-up avant d'appeler `build_mesh_from_heightfield`.
@@ -164,10 +164,18 @@ def build_lightbox_body_mesh(
 
     eps = min(0.05, box_params.depth_mm * 0.001)
     inner_front_z = np.full((rows, cols), box_params.depth_mm + (eps * 2.0), dtype=np.float32)
-    inner_mesh = build_mesh_from_heightfield(
-        inner_front_z, inner_active, face_params.width_mm, face_params.height_mm
+    inner_back_z = np.full(
+        (rows, cols),
+        -eps if box_params.include_back_panel else box_params.back_panel_thickness_mm,
+        dtype=np.float32,
     )
-    inner_mesh.apply_translation((0.0, 0.0, -eps))
+    inner_mesh = build_mesh_from_heightfield(
+        inner_front_z,
+        inner_active,
+        face_params.width_mm,
+        face_params.height_mm,
+        back_z=inner_back_z,
+    )
 
     body_mesh = _from_manifold(_to_manifold(outer_mesh) - _to_manifold(inner_mesh))
     if body_mesh.is_empty:
@@ -230,7 +238,7 @@ def build_lightbox_from_shape_mask(
     image_path: str | Path | None = None,
     image_transform: ImageTransform | None = None,
 ) -> LightBoxBuildResult:
-    """Construit les pieces V1 : corps creux, fond optionnel, facade optionnelle."""
+    """Construit les pieces V1 : corps avec fond integre, facade optionnelle."""
     if box_params.face_mode is LightBoxFaceMode.LITHOPHANE and image_path is None:
         raise ValueError("Une image source est requise pour une facade lithophanie.")
 

@@ -28,29 +28,47 @@ def _ring_mask(size: int = 30) -> np.ndarray:
     return mask
 
 
-def _xy_vertices_inside(mesh, x_min, x_max, y_min, y_max):
+def _xy_vertices_inside(mesh, x_min, x_max, y_min, y_max, z_min=None, z_max=None):
     vertices = mesh.vertices
-    return vertices[
+    inside = (
         (vertices[:, 0] > x_min)
         & (vertices[:, 0] < x_max)
         & (vertices[:, 1] > y_min)
         & (vertices[:, 1] < y_max)
-    ]
+    )
+    if z_min is not None:
+        inside &= vertices[:, 2] > z_min
+    if z_max is not None:
+        inside &= vertices[:, 2] < z_max
+    return vertices[inside]
 
 
-def test_lightbox_body_is_a_valid_hollow_shell(tmp_path):
+def test_lightbox_body_has_an_integrated_back_by_default(tmp_path):
     image_path = make_uniform_image(tmp_path / "photo.png", value=128, width=30, height=30)
+    back_thickness = 1.6
     result = build_lightbox_from_shape_mask(
         np.ones((30, 30), dtype=bool),
         _face_params(),
-        LightBoxParameters(depth_mm=25.0, wall_thickness_mm=6.0, include_back_panel=False),
+        LightBoxParameters(depth_mm=25.0, wall_thickness_mm=6.0, back_panel_thickness_mm=back_thickness),
         image_path=image_path,
     )
 
     validation = validate_mesh(result.body_mesh)
 
     assert validation.is_valid
-    assert _xy_vertices_inside(result.body_mesh, 24.0, 36.0, 24.0, 36.0).size == 0
+    assert _xy_vertices_inside(result.body_mesh, 24.0, 36.0, 24.0, 36.0).size > 0
+    assert (
+        _xy_vertices_inside(
+            result.body_mesh,
+            24.0,
+            36.0,
+            24.0,
+            36.0,
+            z_min=back_thickness + 0.2,
+            z_max=24.0,
+        ).size
+        == 0
+    )
     assert result.back_panel_mesh is None
 
 
@@ -65,9 +83,22 @@ def test_lightbox_preserves_internal_letter_holes(tmp_path):
 
     assert validate_mesh(result.body_mesh).is_valid
     assert validate_mesh(result.face_mesh).is_valid
-    assert validate_mesh(result.back_panel_mesh).is_valid
+    assert result.back_panel_mesh is None
     assert _xy_vertices_inside(result.body_mesh, 24.0, 36.0, 24.0, 36.0).size == 0
     assert _xy_vertices_inside(result.face_mesh, 24.0, 36.0, 24.0, 36.0).size == 0
+
+
+def test_separate_back_panel_is_only_generated_when_requested(tmp_path):
+    image_path = make_uniform_image(tmp_path / "photo.png", value=128, width=30, height=30)
+    result = build_lightbox_from_shape_mask(
+        _ring_mask(),
+        _face_params(),
+        LightBoxParameters(depth_mm=30.0, wall_thickness_mm=4.0, include_back_panel=True),
+        image_path=image_path,
+    )
+
+    assert validate_mesh(result.body_mesh).is_valid
+    assert validate_mesh(result.back_panel_mesh).is_valid
     assert _xy_vertices_inside(result.back_panel_mesh, 24.0, 36.0, 24.0, 36.0).size == 0
 
 

@@ -1,11 +1,34 @@
 # LithoShape3D
 
-Logiciel pour transformer des images en objets 3D imprimables, avec pour cœur
-historique la génération de lithophanies :
+LithoShape3D est un logiciel de création d'objets 3D imprimables à partir
+d'images, avec pour cœur historique la génération de lithophanies :
 
 Image → réglages visuels → aperçu → modèle imprimable → export
 
-**Version actuelle : 0.4.1.** Ce README couvre l'installation et l'usage de
+Le projet évolue vers un outil plus large : lithophanies, reliefs, formes
+personnalisées, masques, zones, matériaux, aperçu rétro-éclairé et premiers
+caissons LightBox.
+
+## État rapide du projet
+
+- **Lithophanie classique** : fonction mature et fiable, pipeline principal
+  du projet.
+- **Shape Composer** : génération dans des formes non rectangulaires
+  (cercle, cœur, étoile, texte, SVG/image rasterisée) avec trous internes
+  préservés.
+- **Zones et masques** : composition de plusieurs zones, masques manuels et
+  segmentation IA locale sur macOS.
+- **Matériaux / couleurs** : séparation du relief, de la composition et du
+  matériau pour éviter qu'une couleur modifie involontairement la géométrie.
+- **Export** : STL et 3MF multi-objets/multi-matériaux.
+- **Windows** : build et smoke test headless vérifiés par GitHub Actions.
+- **LightBox Designer** : première brique core/CLI pour générer un caisson
+  de texte simple ou de silhouette image/SVG, avec capot plat ou façade
+  lithophanie séparée.
+- **Backlight Insert** : prototype expérimental, conservé dans le code mais
+  non considéré comme validé physiquement.
+
+**Version actuelle : 0.4.2.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 
@@ -40,7 +63,8 @@ au sein d'une même scène composée de plusieurs zones.
 - `ui/` — application PySide6 (`MainWindow`, worker de génération, état,
   logging). Assemble `core` et `viewer`, ne réimplémente jamais leur logique.
 - `cli.py` — point d'entrée unique : `lithoshape3d` (sans argument) lance
-  l'application graphique, `lithoshape3d generate ...` reste headless.
+  l'application graphique. Les commandes `generate`, `lightbox-text` et
+  `lightbox-shape` restent utilisables en CLI.
 - `tests/` — tests du `core`, du `viewer` et de l'`ui`.
 
 ## Installation développement
@@ -65,6 +89,8 @@ pytest
 
 ## Utilisation (CLI headless, sans interface graphique)
 
+### Lithophanie simple
+
 ```bash
 lithoshape3d generate photo.png sortie.stl --width 100 --min-thickness 0.8 --max-thickness 3.0
 ```
@@ -72,6 +98,85 @@ lithoshape3d generate photo.png sortie.stl --width 100 --min-thickness 0.8 --max
 `--height` est optionnel : déduite du ratio de l'image si omise. Le mesh est
 validé (fermé, manifold, sans triangle dégénéré) avant d'être écrit sur
 disque ; la commande échoue explicitement si la validation échoue.
+
+### Benchmark opacité LithoLab
+
+Une commande headless génère le coupon de test LithoLab V1 pour mesurer la
+transmission lumineuse d'un filament imprimé avec un LithoMeter :
+
+```bash
+lithoshape3d opacity-coupon LithoLab_Opacity_Coupon_V1.stl
+```
+
+Le coupon contient 7 zones d'épaisseur :
+
+`0.6 / 0.8 / 1.0 / 1.5 / 2.0 / 2.5 / 3.0 mm`
+
+Ce STL ne dépend d'aucune image source. Il sert de benchmark reproductible
+pour comparer des filaments, réglages, buses ou machines dans le protocole
+LithoLab.
+
+### LightBox texte + façade lithophanie
+
+La commande `lightbox-text` génère les premières pièces d'un caisson
+LightBox à partir d'un texte et d'une image de lithophanie. Cette brique
+est un socle headless pour le futur module LightBox Designer ; elle est
+utile pour valider l'architecture core avant l'interface complète.
+
+```bash
+lithoshape3d lightbox-text photo.png sortie_lightbox \
+  --text O \
+  --width 70 \
+  --height 45 \
+  --depth 25 \
+  --wall-thickness 5 \
+  --resolution 2.5
+```
+
+Elle écrit par défaut deux STL dans le dossier de sortie :
+
+- `lightbox_body.stl` — corps creux du caisson avec fond intégré ;
+- `lightbox_face.stl` — façade lithophanie ;
+
+Le fond séparé n'est pas le flux produit retenu. Il reste disponible
+uniquement sur demande explicite avec `--separate-back-panel`, surtout pour
+des tests ou variantes futures.
+
+Cette brique réutilise le pipeline lithophanie fiable et le Shape Composer.
+Elle ne dépend pas du prototype Backlight Insert. Les textes complexes,
+lettres très fines et logos détaillés nécessitent encore des validations
+géométriques et physiques avant d'être considérés comme un flux produit.
+
+### LightBox depuis silhouette image ou SVG
+
+La commande `lightbox-shape` utilise directement une silhouette PNG/JPG/BMP
+ou un SVG comme forme du caisson. Par défaut, elle génère un caisson avec
+capot plat :
+
+```bash
+lithoshape3d lightbox-shape logo.svg sortie_lightbox \
+  --width 120 \
+  --height 80 \
+  --depth 30 \
+  --wall-thickness 3
+```
+
+Pour générer une façade lithophanie à la forme du SVG :
+
+```bash
+lithoshape3d lightbox-shape logo.svg sortie_lightbox \
+  --width 120 \
+  --height 80 \
+  --depth 30 \
+  --wall-thickness 3 \
+  --face lithophane \
+  --lithophane-image photo.png
+```
+
+Note : l'import SVG direct réutilise le rasteriseur QtSvg existant dans
+l'application. Il nécessite donc une installation avec l'extra UI/app
+(`pip install -e ".[app]"`). Sans QtSvg, il faut rasteriser le SVG en PNG
+avant d'utiliser la commande.
 
 ## Benchmark
 
@@ -186,6 +291,8 @@ rectangulaires (Shape Composer), les matériaux/couleurs et l'export 3MF
 multi-objets, et une stratégie couleur qui garantit qu'assigner un
 matériau ne modifie jamais la géométrie (Material Only) ainsi qu'un
 prototype expérimental d'insert rétro-éclairé indépendant (Backlight
-Insert). **Voir [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md)
+Insert), ainsi qu'une première brique LightBox texte/silhouette/SVG avec
+capot plat ou façade lithophanie.
+**Voir [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md)
 pour l'état réel, fonction par fonction, à jour à chaque version** — ce
 README n'est plus le document de référence pour l'état du produit.

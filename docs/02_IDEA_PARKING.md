@@ -205,3 +205,33 @@ Calibration** → P1, documentées dans `docs/01_ROADMAP.md` (phases 0.5/0.6).
 déterministes) → P2, documentée séparément car elle touche l'architecture
 globale, pas un module isolé — voir le compte-rendu de mission pour l'avis
 de Claude sur cette piste spécifiquement.*
+
+---
+
+## LithoLab / LithoMeter — fonctions avancées
+
+**Description** : fonctions issues du projet LithoLab autour des tests
+mesurés de lithophanie : profils filaments, LithoCurve, import CSV
+LithoMeter, connexion ESP32, base de résultats, comparaisons de réglages.
+**Problème utilisateur résolu** : choisir un filament et des réglages avec
+des données réelles plutôt qu'avec des suppositions.
+**Cible** : utilisateurs avancés, créateurs de lithophanies, communauté
+LithoLab, fabricants de filaments/imprimantes.
+**Potentiel commercial** : élevé à moyen terme — différenciation très forte
+si LithoLab produit des données crédibles.
+**Valeur utilisateur** : forte si les mesures restent simples à comprendre.
+**Difficulté estimée** : moyenne à élevée selon le niveau choisi. Générer
+un coupon de test est simple ; importer des CSV est raisonnable ; connecter
+directement un capteur ESP32 et maintenir du support matériel est beaucoup
+plus engageant.
+**Différenciation** : élevée — peu d'outils de lithophanie relient
+génération, protocole de test et mesures de filament.
+**Dépendances architecturales** : à séparer clairement entre génération
+`core/`, import de données, UI et éventuellement matériel. Aucune connexion
+hardware ne doit devenir obligatoire pour générer une lithophanie.
+**Priorité** : P0 pour le coupon benchmark ; P2/P3 pour les fonctions de
+mesure avancées.
+**Statut** : cadré dans `docs/08_LITHOLAB_FEATURES.md`.
+**Raison du report partiel** : le pont logiciel/protocole est stratégique,
+mais la maintenance d'un capteur physique et d'une base communautaire ne
+doit pas ralentir la route vers 1.0.
