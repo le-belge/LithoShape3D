@@ -167,6 +167,38 @@ confirmé sur deux tests physiques distincts (démo complète + micro-coupon)
 après le hotfix géométrique v0.4.2 — le bug géométrique corrigé n'était
 définitivement pas la cause principale.
 
+#### Backlight Insert — correctif chanfrein + plancher 0.6mm (2026-08-29), PHYSICAL TEST #3 en attente
+
+Suite au double échec ci-dessus, changement plus substantiel que le hotfix
+géométrique v0.4.2 (celui-ci ne touchait qu'un garde-fou, pas la forme de
+la transition elle-même) : `compose_backlight_bodies` rampe désormais
+`back_z` (fond de cavité) ET l'épaisseur de l'insert linéairement sur
+`chamfer_width_mm` (0.4mm par défaut, nouveau champ `BacklightInsertParams`)
+depuis le bord de leur masque respectif, au lieu d'une marche verticale
+abrupte — voir `_chamfer_ramp` dans `core/geometry/backlight.py`. Le
+plancher recommandé `white_skin_thickness_mm`/`insert_thickness_mm`
+remonte de 0.40mm (valeur utilisée lors des deux échecs) à **0.60mm**
+(`MIN_BACKLIGHT_WALL_THICKNESS_MM`), avec avertissement explicite
+(`UserWarning`) si une valeur explicite descend en dessous — jamais de
+correction silencieuse.
+
+**Coupon V3** régénéré à partir du MÊME masque rose réel (pas une forme
+synthétique) que les tests #1/#2, découpé à ~32×37mm
+(`examples/physical_validation/backlight_micro_coupon_v3/`) : corps blanc
+et insert tous deux watertight, chanfrein visible numériquement sur la
+carte de profondeur de la cavité (`coupon_v3_verify.png`). 125 points
+localement trop fins pour loger peau+insert à 0.60mm chacun ont
+explicitement aucune cavité (façade préservée, signalé dans
+`result.warnings`, comportement voulu du garde-fou v0.4.2 — pas un défaut
+de ce correctif).
+
+**Non encore imprimé.** Ce correctif change la forme de la transition
+(gradient au lieu d'une marche) et double l'épaisseur minimale de paroi —
+deux changements bien plus substantiels que le hotfix v0.4.2 qui avait
+échoué deux fois de suite. Reste néanmoins non validé physiquement tant
+que ce coupon n'a pas été réellement imprimé et inspecté. **Backlight
+Insert reste EXPERIMENTAL** jusqu'au résultat de ce test #3.
+
 ### Projet / plateforme
 
 | Fonction | Statut | Note |
