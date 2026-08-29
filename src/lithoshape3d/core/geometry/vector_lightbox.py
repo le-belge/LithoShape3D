@@ -44,6 +44,12 @@ mecaniquement un capot fin sans dependre d'une tolerance d'impression trop
 serree, assez peu pour ne pas fragiliser une paroi deja fine
 (wall_thickness_mm typique 1.6-2mm)."""
 
+_SIMPLIFY_EPSILON_MM = 0.005
+"""Tolerance de nettoyage pre-extrusion (voir `_extrude_geom`) -- tres en
+dessous de toute precision d'impression FDM ou de la resolution d'un
+ecran, elimine uniquement les sommets quasi-degeneres issus de chaines de
+booleennes shapely, sans alterer la geometrie percue."""
+
 ASSEMBLY_CLEARANCE_MM = 0.15
 """Jeu d'assemblage FDM (rayon, donc par cote) entre le capot et
 l'ouverture de l'epaulement : valeur usuelle pour une impression FDM
@@ -80,7 +86,19 @@ def _extrude_geom(geom, height: float, z0: float):
     du polygone source -- fonctionne quel que soit le moteur de
     triangulation. Pas un cas isole a ce fichier : tout polygone complexe
     issu d'une chaine de booleennes peut presenter ce defaut -- correction
-    generique, systematique sur CHAQUE composante."""
+    generique, systematique sur CHAQUE composante.
+
+    Chaque `poly` est aussi passe par `simplify(tolerance=_SIMPLIFY_EPSILON_MM,
+    preserve_topology=True)` avant extrusion : une chaine d'intersection/
+    difference shapely peut laisser des sommets quasi-degeneres (distance
+    sub-micrometrique) a la frontiere de la booleenne -- constate reellement
+    (meme cas Cherry Moon) : un sous-polygone valide au sens shapely
+    (`is_valid=True`) produisait tout de meme un mesh non watertight
+    (triangles degeneres) via `trimesh.creation.extrude_polygon`. Une
+    tolerance de 0.005mm (largement sous toute precision d'impression FDM)
+    ne modifie pas la geometrie percue mais elimine ces sommets quasi-
+    colineaires, seule difference entre les deux versions verifiee sur ce
+    cas reel."""
     import trimesh
 
     if geom is None or geom.is_empty:
@@ -88,6 +106,9 @@ def _extrude_geom(geom, height: float, z0: float):
     polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
     meshes = []
     for poly in polys:
+        if poly.is_empty or poly.area <= 0:
+            continue
+        poly = poly.simplify(_SIMPLIFY_EPSILON_MM, preserve_topology=True)
         if poly.is_empty or poly.area <= 0:
             continue
         mesh = trimesh.creation.extrude_polygon(poly, height=height)
