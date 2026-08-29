@@ -184,3 +184,14 @@ def test_lightbox_shape_command_accepts_svg_when_qtsvg_is_available(tmp_path, ca
     assert exit_code == 0
     assert "OK:" in capsys.readouterr().out
     assert validate_mesh(load_stl(output_dir / "lightbox_body.stl")).is_valid
+
+
+def test_opacity_coupon_command_exports_valid_stl(tmp_path, capsys):
+    output_path = tmp_path / "LithoLab_Opacity_Coupon_V1.stl"
+
+    exit_code = main(["opacity-coupon", str(output_path), "--no-labels"])
+
+    assert exit_code == 0
+    assert output_path.exists()
+    assert "Epaisseurs:" in capsys.readouterr().out
+    assert validate_mesh(load_stl(output_path)).is_valid

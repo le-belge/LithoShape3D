@@ -82,6 +82,12 @@ Ce qui n'est pas inclus en P0 :
 - base de données de mesures ;
 - score automatique.
 
+Statut d'implémentation :
+
+- première brique headless : commande `opacity-coupon` ;
+- sortie STL par défaut : `LithoLab_Opacity_Coupon_V1.stl` ;
+- l'UI pourra ensuite exposer ce preset sans changer le moteur.
+
 #### Rapport d'impression lithophanie
 
 Ajouter une fiche exportable ou affichable résumant :
@@ -501,4 +507,3 @@ Ordre recommandé :
 5. Profils filaments manuels.
 6. Import CSV LithoMeter.
 7. Connexion directe au LithoMeter seulement si la demande est prouvée.
-
