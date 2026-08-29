@@ -235,6 +235,35 @@ def test_two_independent_nonzero_paths_do_not_hole_each_other(tmp_path):
         assert len(holes) == 0, "Aucun des deux <path> ne doit avoir de trou -- ils sont independants."
 
 
+def test_fill_rule_evenodd_on_ancestor_group_is_inherited_by_path(tmp_path):
+    """`fill-rule="evenodd"` declare sur un `<g>` ANCETRE (pas sur le
+    `<path>` lui-meme) doit s'appliquer -- exactement comme `fill` est deja
+    herite. Regression reelle (Cherry Moon) : le document entier declare
+    `<g fill-rule="evenodd" clip-rule="evenodd">` autour de tous ses
+    `<path>`, mais seul l'attribut PROPRE au `<path>` etait lu -- retombant
+    a tort sur le defaut `nonzero`. Verifie via un carre avec un trou carre
+    concentrique DE MEME SENS DE PARCOURS (deux sous-chemins CCW) : sous
+    `nonzero`, deux anneaux de meme sens ne s'annulent PAS (le "trou"
+    resterait plein) ; sous `evenodd` (herite du groupe), ils s'annulent et
+    produisent un vrai trou."""
+    outer = "M 0,0 L 100,0 L 100,100 L 0,100 Z"  # CCW en Y-up
+    inner_same_winding = "M 30,30 L 70,30 L 70,70 L 30,70 Z"  # CCW aussi
+    svg = tmp_path / "group_evenodd.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        f'<g fill-rule="evenodd" clip-rule="evenodd">'
+        f'<path d="{outer} {inner_same_winding}" />'
+        "</g></svg>"
+    )
+
+    result = extract_svg_components_from_svg(str(svg), 100.0)
+
+    assert len(result.polygons) == 1
+    poly = result.polygons[0]
+    assert len(poly.interiors) == 1, "fill-rule=evenodd herite du <g> doit produire un trou."
+    assert poly.area == pytest.approx(100 * 100 - 40 * 40, rel=1e-6)
+
+
 def test_nested_island_within_hole_becomes_separate_solid_component(tmp_path):
     """Un `<path>` avec 3 sous-chemins imbriques (exterieur plein, trou,
     ilot plein A L'INTERIEUR DU TROU -- profondeur 2) doit produire DEUX

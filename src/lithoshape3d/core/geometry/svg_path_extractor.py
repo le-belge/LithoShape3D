@@ -290,25 +290,36 @@ def _collect_paths_with_transforms(root) -> list[tuple[str, np.ndarray, str]]:
     `_is_background_fill` -- blanc/`none`, herite des ancetres si non
     surcharge, convention SVG standard), `(d_attr, cumulative_transform,
     fill_rule)` -- le transform cumule inclut celui de tous les ancetres
-    (groupes) ET celui porte par l'element `<path>` lui-meme."""
+    (groupes) ET celui porte par l'element `<path>` lui-meme. `fill-rule`
+    (comme `clip-rule`, alias historique du meme concept sur certains
+    exports) est HERITE des ancetres exactement comme `fill` -- convention
+    CSS/SVG standard (une regle posee sur un `<g>` s'applique a tous ses
+    `<path>` enfants qui ne la redefinissent pas). Regression corrigee :
+    seul l'attribut PROPRE au `<path>` etait auparavant lu, retombant a
+    tort sur le defaut `nonzero` pour tout document qui declare son
+    `fill-rule` au niveau d'un groupe englobant (cas reel : Cherry Moon,
+    `<g fill-rule="evenodd" clip-rule="evenodd">`)."""
     results: list[tuple[str, np.ndarray, str]] = []
 
-    def _walk(elem, inherited: np.ndarray, inherited_fill: str | None) -> None:
+    def _walk(
+        elem, inherited: np.ndarray, inherited_fill: str | None, inherited_fill_rule: str | None
+    ) -> None:
         own = _parse_transform_attr(elem.get("transform"))
         cumulative = inherited @ own
         own_fill = elem.get("fill")
         effective_fill = own_fill if own_fill is not None else inherited_fill
+        own_fill_rule = elem.get("fill-rule") or elem.get("clip-rule")
+        effective_fill_rule = own_fill_rule if own_fill_rule is not None else inherited_fill_rule
         tag = _local_tag(elem)
         if tag == "path":
             d_attr = elem.get("d")
             if d_attr and not _is_background_fill(effective_fill):
-                fill_rule = elem.get("fill-rule") or elem.get("clip-rule") or "nonzero"
-                results.append((d_attr, cumulative, fill_rule))
+                results.append((d_attr, cumulative, effective_fill_rule or "nonzero"))
         for child in elem:
             if isinstance(_local_tag(child), str):
-                _walk(child, cumulative, effective_fill)
+                _walk(child, cumulative, effective_fill, effective_fill_rule)
 
-    _walk(root, _IDENTITY.copy(), None)
+    _walk(root, _IDENTITY.copy(), None, None)
     return results
 
 
