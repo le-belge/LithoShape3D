@@ -385,6 +385,105 @@ def test_backlight_stl_round_trip_stays_watertight(tmp_path, varied_image):
     assert reloaded_insert.is_watertight
 
 
+def test_backlight_chamfer_produces_progressive_back_z_ramp(varied_image):
+    """La marche verticale d'origine entre "pas de cavite" (Z=0) et
+    "cavite pleine profondeur" doit desormais etre une rampe progressive :
+    il doit exister des valeurs de back_z STRICTEMENT entre 0 et
+    z_final-skin pres du bord de la zone (preuve que la rampe existe
+    reellement, pas seulement les deux extremes)."""
+    base = _base_zone()
+    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=0.6, chamfer_width_mm=0.4)
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    _result, front_z, back_z, _active = _compose_and_capture_heightfields(sources)
+
+    carved = back_z > 0.0
+    assert carved.any()
+    candidate_back = np.clip(front_z - 0.6, 0.0, None)
+    full_depth = candidate_back[carved].max()
+    intermediate = back_z[carved & (back_z > 1e-6) & (back_z < full_depth - 1e-6)]
+    assert intermediate.size > 0, "il doit exister des back_z strictement entre 0 et la profondeur pleine"
+
+
+def test_backlight_chamfer_produces_progressive_insert_thickness_ramp(tmp_path):
+    """Meme verification cote insert : l'epaisseur doit varier de facon
+    progressive pres du bord (valeurs strictement entre 0 et
+    insert_thickness_mm), pas juste un mur vertical net. Resolution fine
+    dediee (0.2mm/px, comme le Test D xy_clearance) : a 1mm/px la distance
+    au bord saute directement de 0 (bord) a >=1.0mm (premier pixel
+    interieur), ce qui depasse deja `chamfer_width_mm` par defaut (0.4mm)
+    et ne laisse aucune place a une valeur intermediaire observable."""
+    fine_rows, fine_cols = 300, 300
+    fine_width_mm = fine_height_mm = 60.0
+    yy, xx = np.mgrid[0:fine_rows, 0:fine_cols]
+    array = ((xx * 255) // fine_cols).astype(np.uint8)
+    image_path = tmp_path / "fine_gradient.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    params = GeometryParameters(
+        width_mm=fine_width_mm, height_mm=fine_height_mm,
+        min_thickness_mm=1.5, max_thickness_mm=3.0, resolution=fine_width_mm / fine_cols,
+    )
+    base = Zone(name="Base", composition_mode=CompositionMode.BASE, geometry_params=params)
+    cy, cx, radius = 150, 150, 100
+    fine_mask = (((yy - cy) ** 2 + (xx - cx) ** 2) <= radius**2).astype(np.float32)
+
+    insert_thickness = 0.6
+    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=insert_thickness, chamfer_width_mm=0.4)
+    sources = [
+        ZoneSource(zone=base, image_path=str(image_path)),
+        ZoneSource(zone=rose, image_path=str(image_path), mask=fine_mask),
+    ]
+
+    result = compose_backlight_bodies(sources)
+    insert_mesh = result.insert_meshes["Rose"]
+    top_z = insert_mesh.vertices[:, 2]
+    intermediate = top_z[(top_z > 1e-6) & (top_z < insert_thickness - 1e-6)]
+    assert intermediate.size > 0, "il doit exister des epaisseurs d'insert strictement entre 0 et l'epaisseur pleine"
+
+
+def test_backlight_zero_chamfer_stays_close_to_original_abrupt_step(varied_image):
+    """`chamfer_width_mm=0` doit redonner un comportement proche de l'ancien
+    (marche quasi abrupte) : back_z vaut soit 0, soit la profondeur pleine
+    partout dans la zone -- pas de regression brutale pour ce cas limite."""
+    base = _base_zone()
+    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=0.6, chamfer_width_mm=0.0)
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    _result, front_z, back_z, _active = _compose_and_capture_heightfields(sources)
+
+    carved = back_z > 0.0
+    assert carved.any()
+    candidate_back = np.clip(front_z - 0.6, 0.0, None)
+    # avec chanfrein desactive, back_z == candidate_back partout ou creuse
+    # (rampe constante a 1.0) -- comportement identique a l'ancien code.
+    np.testing.assert_allclose(back_z[carved], candidate_back[carved], atol=1e-6)
+
+
+def test_backlight_floor_warns_below_0_6mm_for_skin_and_insert():
+    """Le plancher de 0.6mm doit etre signale (pas silencieux) des qu'une
+    valeur explicite descend en dessous, pour la peau ET pour l'insert."""
+    with pytest.warns(UserWarning, match="white_skin_thickness_mm"):
+        BacklightInsertParams(white_skin_thickness_mm=0.4)
+    with pytest.warns(UserWarning, match="insert_thickness_mm"):
+        BacklightInsertParams(insert_thickness_mm=0.4)
+
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        # valeurs au plancher (ou au-dessus) : aucun avertissement.
+        BacklightInsertParams(white_skin_thickness_mm=0.6, insert_thickness_mm=0.6)
+        # defauts actuels : deja au plancher commun, jamais d'avertissement.
+        BacklightInsertParams()
+
+
 def test_no_backlight_zones_matches_plain_composition(varied_image):
     """Zero zone Backlight Insert -> comportement identique a
     `compose_scene_mesh` (chemin sans effet)."""

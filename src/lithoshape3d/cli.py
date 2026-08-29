@@ -60,6 +60,122 @@ def _build_parser() -> argparse.ArgumentParser:
     lightbox.add_argument("--font", default=None, help="Chemin optionnel vers une police .ttf/.otf")
     lightbox.add_argument("--regular", action="store_true", help="Desactive le faux gras Pillow")
 
+    letters = subparsers.add_parser(
+        "lightbox-letters",
+        help="Genere un caisson lumineux par lettre individuelle (corps + capot + fond + DXF)",
+    )
+    letters.add_argument("--text", required=True, help="Mot a decouper en lettres")
+    letters.add_argument("--font", required=True, help="Chemin vers une police .ttf/.otf")
+    letters.add_argument("--output-dir", required=True, help="Dossier de sortie")
+    letters.add_argument("--font-size", type=float, default=40.0, help="Taille de corps en mm")
+    letters.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
+    letters.add_argument("--depth", type=float, default=25.0, help="Profondeur du caisson en mm")
+    letters.add_argument("--wall-thickness", type=float, default=1.6, help="Epaisseur des parois")
+    letters.add_argument("--back-thickness", type=float, default=1.2, help="Epaisseur du fond")
+    letters.add_argument(
+        "--cap-thickness",
+        type=float,
+        default=1.2,
+        help="Epaisseur du capot plat (mm) -- l'epaulement de retention est ajuste pour correspondre exactement.",
+    )
+    letters.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
+    letters.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
+    letters.add_argument(
+        "--image-letter",
+        action="append",
+        default=[],
+        metavar="INDEX=PATH",
+        help="Image de lithophanie pour la lettre d'index INDEX (0-based). Repetable.",
+    )
+    letters.add_argument(
+        "--transform-letter",
+        action="append",
+        default=[],
+        metavar="INDEX=offset_x=..,offset_y=..,scale=..,rotation_deg=..",
+        help="Transform de cadrage pour la lettre d'index INDEX. Repetable.",
+    )
+
+    image_box = subparsers.add_parser(
+        "lightbox-image",
+        help="Genere un caisson lumineux vectoriel a partir d'une silhouette extraite d'image",
+    )
+    image_box.add_argument("--image", required=True, help="Image source (PNG/JPG/SVG)")
+    image_box.add_argument("--output-dir", required=True, help="Dossier de sortie")
+    image_box.add_argument("--width-mm", type=float, default=100.0, help="Largeur en mm")
+    image_box.add_argument("--depth-mm", type=float, default=25.0, help="Profondeur du caisson en mm")
+    image_box.add_argument(
+        "--wall-thickness-mm", type=float, default=1.6, help="Epaisseur des parois en mm"
+    )
+    image_box.add_argument("--back-thickness-mm", type=float, default=1.2, help="Epaisseur du fond en mm")
+    image_box.add_argument(
+        "--threshold",
+        default="auto",
+        metavar="auto|0-255",
+        help="Seuillage Cas B (photo sans transparence) : 'auto' (Otsu) ou une valeur manuelle 0-255.",
+    )
+    image_box.add_argument(
+        "--min-component-area-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Aire minimale (fraction de l'aire totale) pour qu'une composante ne soit pas "
+            "consideree comme du bruit. Omis : 0.1%% en mode silhouette, 0.02%% en mode "
+            "artwork-envelope (garde le detail fin du trait)."
+        ),
+    )
+    image_box.add_argument(
+        "--cap-thickness-mm",
+        type=float,
+        default=None,
+        help="Epaisseur du capot plat/lisse (mode par defaut, sans lithophanie).",
+    )
+    image_box.add_argument("--cap-image", default=None, help="Image de lithophanie optionnelle pour le capot")
+    image_box.add_argument(
+        "--cap-transform",
+        default=None,
+        metavar="offset_x=..,offset_y=..,scale=..,rotation_deg=..",
+        help="Transform de cadrage pour l'image du capot (ignore si --cap-image absent).",
+    )
+    image_box.add_argument("--resolution", type=float, default=_GP_DEFAULTS["resolution"])
+    image_box.add_argument("--min-thickness", type=float, default=_GP_DEFAULTS["min_thickness_mm"])
+    image_box.add_argument("--max-thickness", type=float, default=_GP_DEFAULTS["max_thickness_mm"])
+    image_box.add_argument(
+        "--shape-mode",
+        default="silhouette",
+        choices=["silhouette", "artwork-envelope"],
+        help=(
+            "'silhouette' (par defaut) : contour = silhouette extraite (logo alpha ou photo "
+            "seuillee). 'artwork-envelope' : contour = enveloppe unifiee d'un dessin au trait "
+            "(un seul caisson meme si le dessin a des elements disjoints, ex. Thunderdome)."
+        ),
+    )
+    image_box.add_argument(
+        "--cap-mode",
+        default=None,
+        choices=["flat", "lithophane", "flat-two-color"],
+        help=(
+            "Mode du capot. Omis : lithophanie si --cap-image fourni, sinon plat. "
+            "'flat-two-color' : deux capots plats complementaires (encre/fond) decoupes depuis "
+            "l'encre du dessin -- necessite --shape-mode artwork-envelope."
+        ),
+    )
+    image_box.add_argument(
+        "--closing-radius-px",
+        type=int,
+        default=None,
+        help=(
+            "Rayon (px, masque de travail) de la fermeture morphologique unifiant les "
+            "composantes d'encre disjointes en mode artwork-envelope. Omis : recherche "
+            "automatique du plus petit rayon suffisant."
+        ),
+    )
+    image_box.add_argument(
+        "--max-closing-radius-px",
+        type=int,
+        default=None,
+        help="Plafond de la recherche automatique de rayon de fermeture (mode artwork-envelope).",
+    )
+
     shape_lightbox = subparsers.add_parser(
         "lightbox-shape",
         help="Genere un caisson LightBox depuis une silhouette image ou SVG",
@@ -241,6 +357,150 @@ def _cmd_lightbox_text(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_indexed_kv(raw_values: list[str]) -> dict[int, str]:
+    result: dict[int, str] = {}
+    for raw in raw_values:
+        index_str, _, value = raw.partition("=")
+        try:
+            index = int(index_str)
+        except ValueError as exc:
+            raise ValueError(f"Index invalide dans '{raw}' (attendu INDEX=...).") from exc
+        result[index] = value
+    return result
+
+
+def _parse_transform(raw: str):
+    from lithoshape3d.core.scene.models import ImageTransform
+
+    kwargs: dict[str, float] = {}
+    for part in raw.split(","):
+        key, _, value = part.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        if key == "offset_x":
+            kwargs["offset_x"] = float(value)
+        elif key == "offset_y":
+            kwargs["offset_y"] = float(value)
+        elif key == "scale":
+            kwargs["scale"] = float(value)
+        elif key == "rotation_deg":
+            kwargs["rotation_deg"] = float(value)
+        else:
+            raise ValueError(f"Cle de transform inconnue : '{key}'.")
+    return ImageTransform(**kwargs)
+
+
+def _cmd_lightbox_letters(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.geometry.lightbox_letters_export import generate_lightbox_letters
+
+    images_by_index = _parse_indexed_kv(args.image_letter)
+    transforms_raw = _parse_indexed_kv(args.transform_letter)
+    transforms_by_index = {idx: _parse_transform(raw) for idx, raw in transforms_raw.items()}
+
+    result = generate_lightbox_letters(
+        args.text,
+        args.font,
+        args.output_dir,
+        font_size_mm=args.font_size,
+        resolution=args.resolution,
+        depth_mm=args.depth,
+        wall_thickness_mm=args.wall_thickness,
+        back_thickness_mm=args.back_thickness,
+        cap_thickness_mm=args.cap_thickness,
+        min_thickness_mm=args.min_thickness,
+        max_thickness_mm=args.max_thickness,
+        images_by_index=images_by_index,
+        transforms_by_index=transforms_by_index,
+    )
+
+    for level, text in result.messages:
+        prefix = "ECHEC" if level == "error" else "AVERTISSEMENT"
+        print(f"{prefix}: {text}")
+
+    if not result.ok:
+        print("ECHEC: aucune lettre n'a pu etre generee.")
+        return 1
+
+    print("OK:", ", ".join(str(path) for path in result.written))
+    return 0
+
+
+def _cmd_lightbox_image(args: argparse.Namespace) -> int:
+    from lithoshape3d.core.geometry.image_lightbox_export import (
+        DEFAULT_CAP_THICKNESS_MM,
+        generate_lightbox_from_image,
+    )
+
+    image_path = args.image
+    shape_mode = args.shape_mode.replace("-", "_")
+    # Un `.svg` n'est JAMAIS rasterise avant l'appel, quel que soit le mode :
+    # `generate_lightbox_from_image` utilise directement le contour
+    # vectoriel exact (`core/geometry/svg_path_extractor.py` pour
+    # "silhouette", `core/geometry/vector_envelope.py` en plus pour
+    # "artwork_envelope") -- voir sa docstring.
+
+    threshold_raw = args.threshold.strip()
+    if threshold_raw.lower() == "auto":
+        threshold_mode, threshold_value = "auto", None
+    else:
+        try:
+            threshold_value = int(threshold_raw)
+        except ValueError:
+            print(f"ECHEC: --threshold invalide : '{threshold_raw}' (attendu 'auto' ou 0-255).")
+            return 1
+        if not (0 <= threshold_value <= 255):
+            print(f"ECHEC: --threshold hors plage : {threshold_value} (attendu 0-255).")
+            return 1
+        threshold_mode = "manual"
+
+    cap_transform = _parse_transform(args.cap_transform) if args.cap_transform else None
+
+    cap_mode = args.cap_mode.replace("-", "_") if args.cap_mode else None
+
+    kwargs = {
+        "width_mm": args.width_mm,
+        "depth_mm": args.depth_mm,
+        "wall_thickness_mm": args.wall_thickness_mm,
+        "back_thickness_mm": args.back_thickness_mm,
+        "threshold_mode": threshold_mode,
+        "threshold_value": threshold_value,
+        "min_component_area_ratio": args.min_component_area_ratio,
+        "cap_image_path": args.cap_image,
+        "cap_image_transform": cap_transform,
+        "resolution": args.resolution,
+        "min_thickness_mm": args.min_thickness,
+        "max_thickness_mm": args.max_thickness,
+        "shape_mode": shape_mode,
+        "cap_mode": cap_mode,
+        "closing_radius_px": args.closing_radius_px,
+        "max_closing_radius_px": args.max_closing_radius_px,
+    }
+    if args.cap_thickness_mm is not None:
+        kwargs["cap_thickness_mm"] = args.cap_thickness_mm
+    else:
+        kwargs["cap_thickness_mm"] = DEFAULT_CAP_THICKNESS_MM
+
+    try:
+        result = generate_lightbox_from_image(image_path, args.output_dir, **kwargs)
+    except ValueError as exc:
+        print(f"ECHEC: {exc}")
+        return 1
+
+    for level, text in result.messages:
+        prefix = "ECHEC" if level == "error" else "AVERTISSEMENT"
+        print(f"{prefix}: {text}")
+
+    if not result.ok:
+        print("ECHEC: aucun fichier n'a pu etre genere.")
+        return 1
+
+    if result.threshold_used is not None:
+        print(f"Seuil utilise : {result.threshold_used}")
+    print("OK:", ", ".join(str(path) for path in result.written))
+    return 0
+
+
 def _shape_mask_from_path(path: str | Path, params: GeometryParameters, threshold: float):
     import numpy as np
     from PIL import Image
@@ -401,6 +661,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_generate(args)
     if args.command == "lightbox-text":
         return _cmd_lightbox_text(args)
+    if args.command == "lightbox-letters":
+        return _cmd_lightbox_letters(args)
+    if args.command == "lightbox-image":
+        return _cmd_lightbox_image(args)
     if args.command == "lightbox-shape":
         return _cmd_lightbox_shape(args)
     if args.command == "opacity-coupon":

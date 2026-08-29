@@ -14,7 +14,27 @@ Convention (identique a mesh_builder.py) : Z=0 = dos (cote source de
 lumiere), Z=z_final(cellule) = face avant (cote spectateur). L'insert est
 donc pose CONTRE le dos (Z=[0, insert_thickness_mm]) et la peau blanche
 occupe le haut de la plage [z_final-skin, z_final] -- entre les deux, un
-vide (la cavite) que l'insert vient (partiellement) combler."""
+vide (la cavite) que l'insert vient (partiellement) combler.
+
+Jonction cavite/insert (chanfrein, retour terrain post-0.4.1) : la marche
+verticale d'origine entre "pas de cavite" et "cavite pleine profondeur"
+(idem cote insert entre "pas d'insert" et "insert pleine epaisseur") est
+difficile a imprimer/assembler proprement en FDM. Les deux profils sont
+donc rampes lineairement sur `chamfer_width_mm` a partir du bord de leur
+propre masque (cf. `_chamfer_ramp` et son usage dans
+`compose_backlight_bodies`), sans nouveau parametre de maillage : seule la
+carte de hauteur varie, le meme `build_mesh_from_heightfield` fait le
+reste. Cette rampe reste bornee au domaine deja juge `feasible` par le
+garde-fou existant -- elle ne fait que lisser une transition deja valide,
+jamais deborder dans une zone jugee trop fine.
+
+Limite connue (a documenter cote utilisateur) : le contour de la cavite
+(bord de `feasible`) et celui de l'insert (bord de `insert_mask`, erode de
+`xy_clearance_mm` par rapport a `feasible`) ne coincident PAS en XY -- deux
+rampes independantes sur deux contours decales ne peuvent donc s'aligner
+parfaitement pixel pour pixel ; l'alignement visuel du chanfrein
+cavite/insert reste approximatif, a l'echelle de `xy_clearance_mm` +
+`chamfer_width_mm`."""
 
 from __future__ import annotations
 
@@ -99,6 +119,29 @@ def _erode_by_mm(mask: np.ndarray, clearance_mm: float, pixel_size_mm: float) ->
     return distance_mm > clearance_mm
 
 
+def _chamfer_ramp(mask: np.ndarray, chamfer_width_mm: float, pixel_size_mm: float, zone_name: str) -> tuple[np.ndarray, list[str]]:
+    """Rampe 0->1 depuis le bord de `mask` (0 pile au bord, 1 a partir de
+    `chamfer_width_mm` a l'interieur) -- meme technique de carte de distance
+    que `_erode_by_mm`, mais utilisee comme facteur d'interpolation continu
+    plutot que comme seuil binaire. `chamfer_width_mm<=0` degenere en rampe
+    constante a 1.0 (comportement d'origine, marche abrupte). Signale (sans
+    bloquer) quand une zone est trop etroite pour jamais atteindre un fond
+    plat (aucun pixel a distance >= chamfer_width_mm de son propre bord) :
+    la cavite/l'insert restent alors entierement en pente."""
+    warnings_out: list[str] = []
+    if chamfer_width_mm <= 0 or pixel_size_mm <= 0 or not mask.any():
+        return np.ones_like(mask, dtype=np.float32), warnings_out
+    distance_mm = ndimage.distance_transform_edt(mask) * pixel_size_mm
+    ramp = np.clip(distance_mm / chamfer_width_mm, 0.0, 1.0).astype(np.float32)
+    if not np.any(distance_mm[mask] >= chamfer_width_mm):
+        warnings_out.append(
+            f"Zone '{zone_name}' : trop etroite pour un chanfrein complet de "
+            f"{chamfer_width_mm:.2f}mm -- la cavite/l'insert restent entierement en pente "
+            "(pas de fond plat)."
+        )
+    return ramp, warnings_out
+
+
 def compose_backlight_bodies(
     zone_sources: list[ZoneSource],
     mask_threshold: float = DEFAULT_MASK_THRESHOLD,
@@ -178,9 +221,15 @@ def compose_backlight_bodies(
 
         candidate_back = np.clip(z_final - skin, 0.0, None)
         candidate_back = np.clip(np.minimum(candidate_back, z_final - _MIN_SKIN_RESIDUAL_MM), 0.0, None)
-        back_z[feasible] = candidate_back[feasible]
 
-        insert_front = np.full((rows, cols), insert_thickness, dtype=np.float32)
+        chamfer_width = max(params.chamfer_width_mm, 0.0)
+        cavity_ramp, cavity_ramp_warnings = _chamfer_ramp(feasible, chamfer_width, pixel_size_mm, zone.name)
+        warnings.extend(cavity_ramp_warnings)
+        back_z[feasible] = (cavity_ramp * candidate_back)[feasible]
+
+        insert_ramp, insert_ramp_warnings = _chamfer_ramp(insert_mask, chamfer_width, pixel_size_mm, zone.name)
+        warnings.extend(insert_ramp_warnings)
+        insert_front = insert_ramp * insert_thickness
         insert_mesh = build_mesh_from_heightfield(insert_front, insert_mask, width_mm, height_mm)
 
         name = zone.material.name

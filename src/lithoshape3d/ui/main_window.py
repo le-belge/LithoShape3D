@@ -70,6 +70,7 @@ from lithoshape3d.core.image.preprocessing import (
 )
 from lithoshape3d.core.scene.mask_io import load_zone_mask
 from lithoshape3d.core.scene.models import (
+    BacklightInsertParams,
     ColorStrategy,
     CompositionMode,
     GeometryParameters,
@@ -472,7 +473,7 @@ class MainWindow(QMainWindow):
         self.backlight_skin_spin.setRange(0.05, 2.0)
         self.backlight_skin_spin.setSingleStep(0.05)
         self.backlight_skin_spin.setSuffix(" mm")
-        self.backlight_skin_spin.setValue(0.40)
+        self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
         self.backlight_skin_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
         color_strategy_form.addRow("Epaisseur peau blanche", self.backlight_skin_spin)
 
@@ -804,6 +805,15 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Face", lambda: self.scene_viewer.view_front())
         view_menu.addAction("Isometrique", lambda: self.scene_viewer.view_isometric())
         view_menu.addAction("Reset camera", lambda: self.scene_viewer.reset_camera())
+
+        tools_menu = self.menuBar().addMenu("Outils")
+        lightbox_letters_action = QAction("LightBox Letters...", self)
+        lightbox_letters_action.triggered.connect(self._open_lightbox_letters_dialog)
+        tools_menu.addAction(lightbox_letters_action)
+
+        lightbox_image_action = QAction("LightBox depuis image...", self)
+        lightbox_image_action.triggered.connect(self._open_lightbox_image_dialog)
+        tools_menu.addAction(lightbox_image_action)
 
         help_menu = self.menuBar().addMenu("Aide")
         about_action = QAction("A propos", self)
@@ -1859,6 +1869,18 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Divers
     # ------------------------------------------------------------------ #
+    def _open_lightbox_letters_dialog(self) -> None:
+        from lithoshape3d.ui.lightbox_letters_dialog import LightboxLettersDialog
+
+        dialog = LightboxLettersDialog(self)
+        dialog.exec()
+
+    def _open_lightbox_image_dialog(self) -> None:
+        from lithoshape3d.ui.lightbox_image_dialog import LightboxImageDialog
+
+        dialog = LightboxImageDialog(self)
+        dialog.exec()
+
     def _show_about(self) -> None:
         from lithoshape3d import __version__
 

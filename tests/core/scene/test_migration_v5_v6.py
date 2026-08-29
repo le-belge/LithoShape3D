@@ -60,7 +60,11 @@ def test_v5_migration_gives_every_zone_harmless_default_backlight_params():
     project = project_from_dict(copy.deepcopy(_V5_PROJECT))
 
     for zone in project.scene.zones:
-        assert zone.backlight_insert.white_skin_thickness_mm == 0.40
+        # 0.60mm (plancher commun peau/insert, cf. MIN_BACKLIGHT_WALL_THICKNESS_MM
+        # dans models.py) depuis la remontee du defaut de white_skin_thickness_mm
+        # (etait 0.40mm) -- la valeur exacte importe peu ici, seul compte le fait
+        # que la migration retombe sur le defaut courant de BacklightInsertParams.
+        assert zone.backlight_insert.white_skin_thickness_mm == 0.60
         assert zone.backlight_insert.insert_thickness_mm == 0.60
         assert zone.backlight_insert.xy_clearance_mm == 0.20
 

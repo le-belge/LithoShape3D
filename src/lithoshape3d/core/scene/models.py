@@ -8,6 +8,7 @@ disque, jamais un mesh serialise dans le projet.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from uuid import uuid4
@@ -82,21 +83,71 @@ class ColorStrategy(Enum):
     colore sans modifier la facade eteinte -- voir core/geometry/backlight.py."""
 
 
+MIN_BACKLIGHT_WALL_THICKNESS_MM = 0.60
+"""Plancher commun a `white_skin_thickness_mm` ET `insert_thickness_mm`
+(retour terrain post-0.4.1, cf. echange de commercialisation Backlight
+Insert) : sous ~0.5mm en FDM (buse 0.4mm, 2 parois), la peau/l'insert
+deviennent trop fragiles a l'impression et au demoulage/assemblage --
+0.6mm (= 2 couches de paroi confortables avec la plupart des profils) est
+le minimum recommande avant validation par de vraies impressions. Pas
+impose de force (on ne corrige jamais silencieusement une valeur choisie
+par l'utilisateur) : `BacklightInsertParams.__post_init__` emet un
+avertissement `UserWarning` explicite en dessous de ce plancher, meme
+esprit que les avertissements "jamais silencieux" de backlight.py."""
+
+
 @dataclass
 class BacklightInsertParams:
     """Parametres du mode BACKLIGHT_INSERT (v0.4.1) -- toutes les valeurs
     par defaut sont EXPERIMENTALES (a valider par de vraies impressions,
     cf. mission), pas des constantes physiquement optimales."""
 
-    white_skin_thickness_mm: float = 0.40
+    white_skin_thickness_mm: float = MIN_BACKLIGHT_WALL_THICKNESS_MM
+    """Remonte de 0.40mm (defaut 0.4.1 initial) a 0.60mm : retour terrain
+    montrant qu'une peau plus fine se fissure/se voile facilement en FDM
+    et a la manipulation avant assemblage avec l'insert -- alignee sur
+    `MIN_BACKLIGHT_WALL_THICKNESS_MM`, le meme plancher que l'insert."""
     insert_thickness_mm: float = 0.60
     """Milieu de la plage recommandee par la mission (0.40-0.80mm) : assez
     epais pour rester manipulable/imprimable independamment, assez fin pour
-    laisser passer la lumiere en retro-eclairage."""
+    laisser passer la lumiere en retro-eclairage. Deja egal au plancher
+    `MIN_BACKLIGHT_WALL_THICKNESS_MM` -- ne pas descendre en dessous."""
     xy_clearance_mm: float = 0.20
     """Jeu lateral (pas en profondeur) entre le contour de l'insert et la
     paroi de la cavite qui l'accueille, pour qu'il s'insere sans forcer.
     Presets : Serre=0.10, Standard=0.20 (par defaut), Facile=0.30."""
+    chamfer_width_mm: float = 0.4
+    """Largeur (en XY, mesuree depuis le bord du masque interieur) de la
+    rampe de transition entre "pas de cavite" (paroi arriere pleine, Z=0)
+    et la profondeur de cavite complete -- transforme la marche verticale
+    a la jonction cavite/insert en paroi en pente (chanfrein), imprimable
+    et assemblable proprement en FDM sans support. Milieu de la plage
+    discrete visee (0.3-0.5mm) suggeree lors de la conception de ce
+    chanfrein -- meme convention documentaire que les autres constantes de
+    ce fichier (a valider par de vraies impressions). 0.0 desactive le
+    chanfrein (retour a la marche abrupte d'origine)."""
+
+    def __post_init__(self) -> None:
+        # Plancher "jamais impose silencieusement" (cf.
+        # MIN_BACKLIGHT_WALL_THICKNESS_MM) : on avertit sans corriger, pour
+        # ne jamais changer une valeur choisie explicitement par
+        # l'utilisateur/l'appelant dans son dos.
+        if 0.0 < self.white_skin_thickness_mm < MIN_BACKLIGHT_WALL_THICKNESS_MM:
+            warnings.warn(
+                f"BacklightInsertParams.white_skin_thickness_mm={self.white_skin_thickness_mm:.2f}mm "
+                f"est sous le plancher recommande de {MIN_BACKLIGHT_WALL_THICKNESS_MM:.2f}mm "
+                "(peau fragile/fissurable en FDM) -- valeur conservee telle quelle, aucune correction "
+                "automatique.",
+                stacklevel=2,
+            )
+        if 0.0 < self.insert_thickness_mm < MIN_BACKLIGHT_WALL_THICKNESS_MM:
+            warnings.warn(
+                f"BacklightInsertParams.insert_thickness_mm={self.insert_thickness_mm:.2f}mm "
+                f"est sous le plancher recommande de {MIN_BACKLIGHT_WALL_THICKNESS_MM:.2f}mm "
+                "(insert fragile/difficile a manipuler independamment en FDM) -- valeur conservee "
+                "telle quelle, aucune correction automatique.",
+                stacklevel=2,
+            )
 
 
 class SupportType(Enum):
