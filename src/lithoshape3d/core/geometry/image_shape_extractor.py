@@ -116,14 +116,26 @@ def load_image_for_extraction(image_path: str | Path) -> tuple[np.ndarray | None
     from lithoshape3d.core.image.preprocessing import to_grayscale_array
 
     image = Image.open(image_path)
-    gray = to_grayscale_array(image)
 
     if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
         rgba = np.asarray(image.convert("RGBA"), dtype=np.float32)
         alpha = rgba[:, :, 3] / 255.0
+        # Composite sur fond BLANC avant la conversion en niveaux de gris :
+        # `Image.convert("L")` ignore le canal alpha et lit le RGB brut des
+        # pixels transparents tel quel -- souvent (0,0,0) selon l'exporteur
+        # (ex. rasterisation QtSvg), ce qui les fait apparaitre NOIRS (donc
+        # "encre") au lieu de BLANCS (fond). Sur un logo a silhouette pleine
+        # (ex. logo Tesla) ceci inversait completement la detection : tout
+        # le canevas devenait "encre" (seuil Otsu degenere a 0), produisant
+        # un contour = rectangle plein au lieu de la silhouette reelle.
+        white_bg = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        composited = Image.alpha_composite(white_bg, image.convert("RGBA"))
+        gray = to_grayscale_array(composited.convert("RGB"))
         if _alpha_is_exploitable(alpha):
             return alpha, gray
+        return None, gray
 
+    gray = to_grayscale_array(image)
     return None, gray
 
 
