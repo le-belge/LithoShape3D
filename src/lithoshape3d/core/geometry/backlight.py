@@ -99,6 +99,34 @@ def _erode_by_mm(mask: np.ndarray, clearance_mm: float, pixel_size_mm: float) ->
     return distance_mm > clearance_mm
 
 
+def _soft_cavity_back_z(
+    back_z: np.ndarray,
+    candidate_back: np.ndarray,
+    feasible: np.ndarray,
+    insert_mask: np.ndarray,
+    pixel_size_mm: float,
+    blend_mm: float,
+) -> None:
+    """Creuse plein sous l'insert, puis remonte en rampe autour.
+
+    La rampe ne touche que la face arriere (`back_z`) : surface avant et
+    insert plat restent inchanges.
+    """
+    back_z[insert_mask] = candidate_back[insert_mask]
+
+    if blend_mm <= 0:
+        return
+
+    distance_to_insert_mm = ndimage.distance_transform_edt(~insert_mask) * pixel_size_mm
+    blend_mask = feasible & ~insert_mask & (distance_to_insert_mm <= blend_mm)
+    if not blend_mask.any():
+        return
+
+    t = distance_to_insert_mm[blend_mask] / blend_mm
+    soft_back = candidate_back[blend_mask] * (1.0 - t)
+    back_z[blend_mask] = np.maximum(back_z[blend_mask], soft_back)
+
+
 def compose_backlight_bodies(
     zone_sources: list[ZoneSource],
     mask_threshold: float = DEFAULT_MASK_THRESHOLD,
@@ -178,7 +206,15 @@ def compose_backlight_bodies(
 
         candidate_back = np.clip(z_final - skin, 0.0, None)
         candidate_back = np.clip(np.minimum(candidate_back, z_final - _MIN_SKIN_RESIDUAL_MM), 0.0, None)
-        back_z[feasible] = candidate_back[feasible]
+        blend_mm = max(pixel_size_mm * 2.0, params.xy_clearance_mm)
+        _soft_cavity_back_z(
+            back_z,
+            candidate_back,
+            feasible,
+            insert_mask,
+            pixel_size_mm,
+            blend_mm,
+        )
 
         insert_front = np.full((rows, cols), insert_thickness, dtype=np.float32)
         insert_mesh = build_mesh_from_heightfield(insert_front, insert_mask, width_mm, height_mm)

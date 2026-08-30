@@ -142,6 +142,31 @@ def test_backlight_skin_and_insert_sit_behind_the_front_surface(varied_image):
     assert insert_mesh.bounds[1][2] == pytest.approx(0.6, abs=1e-4)
 
 
+def test_backlight_cavity_has_soft_transition_around_insert(varied_image):
+    base = _base_zone()
+    rose = _backlight_zone(white_skin_thickness_mm=0.4, insert_thickness_mm=0.6, xy_clearance_mm=2.0)
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    result, front_z, back_z, active = _compose_and_capture_heightfields(sources)
+
+    zone_mask = np.flipud(_rose_mask()).astype(bool) & active
+    carved = zone_mask & (back_z > 0.0)
+    assert carved.any()
+    assert validate_mesh(result.white_mesh).is_valid
+    assert validate_mesh(result.insert_meshes["Rose"]).is_valid
+
+    candidate_back = np.clip(front_z - 0.4, 0.0, None)
+    fully_carved = carved & np.isclose(back_z, candidate_back)
+    softened = carved & (back_z < candidate_back - 1e-5)
+
+    assert fully_carved.any()
+    assert softened.any()
+    assert (front_z - back_z)[carved].min() >= 0.4 - 1e-6
+
+
 def test_backlight_with_ring_shaped_zone_stays_manifold(varied_image):
     """Test C (masque complexe) : la zone Backlight Insert elle-meme a un
     trou reel (anneau) -- l'insert ET la cavite doivent rester manifold."""
@@ -292,11 +317,11 @@ def test_backlight_thin_region_gets_no_cavity_instead_of_collision(tmp_path):
     # facade pleine epaisseur -- jamais de trou).
     assert np.all(back_z[thin_points] == 0.0)
 
-    # points assez epais : cavite creusee, ET l'insert (0.6mm) tient
-    # entierement dans la profondeur disponible (l'invariant que l'ancien
-    # code ne verifiait pas).
-    assert np.all(back_z[thick_points] > 0.0)
-    assert np.all(back_z[thick_points] >= 0.6 - 1e-6)
+    # points assez epais : la cavite peut etre pleine ou adoucie, mais elle
+    # ne doit jamais exister hors de la region geometriquement faisable.
+    carved = zone_mask & (back_z > 0.0)
+    assert carved.any()
+    assert np.all(thick_points[carved])
 
     # l'empreinte de l'insert doit exclure la region trop fine (rester a
     # gauche du debut de la zone trop fine, avec une petite marge pour
