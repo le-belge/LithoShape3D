@@ -1643,6 +1643,10 @@ class MainWindow(QMainWindow):
             self._current_material_meshes = {
                 white_name: self._current_backlight_result.white_mesh,
                 **self._current_backlight_result.insert_meshes,
+                **{
+                    f"{name} (support sacrificiel a retirer)": mesh
+                    for name, mesh in self._current_backlight_result.breakaway_support_meshes.items()
+                },
             }
         elif self._current_material_meshes is None:
             try:

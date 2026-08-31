@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import numpy as np
 import trimesh
+from scipy import ndimage
 
 from lithoshape3d.core.geometry.heightmap import Heightmap
 from lithoshape3d.core.geometry.thickness import compute_thickness_mm
@@ -47,6 +48,56 @@ DEFAULT_MASK_THRESHOLD = 0.5
 disponibles pour un futur feathering (relief/epaisseur progressifs) : ce
 seuil ne modifie ni ne detruit le masque source, il ne sert qu'a decider
 quelles cellules recoivent de la geometrie dans cette phase."""
+
+MIN_CELL_ISLAND_AREA_MM2 = 1.0
+"""Aire minimale (mm2, seuil ABSOLU -- independant de la resolution ou de
+la taille du masque) d'un ilot de cellules pour etre conserve dans
+`build_mesh_from_heightfield`. Corrige un bug reel : une marche diagonale
+d'1 pixel dans un masque (frequente sur une selection IA/SAM2 non nettoyee)
+peut laisser, apres la regle "4 coins actifs" qui definit `cell_active`,
+un ou deux ilots de 1-2 cellules qui ne touchent le reste de la forme que
+par un seul SOMMET partage (pas une arete) -- topologiquement, deux solides
+distincts qui ne se rejoignent qu'en un point. Ce point cree une arete
+partagee par 4 faces au lieu de 2 (viole la definition d'un maillage
+manifold/watertight) des que la grille est assez fine pour que cette marche
+tienne sur un seul pixel. Diagnostic complet reproduit sur un masque reel
+(export SAM2, marche diagonale a la limite d'un petale de rose) : le mesh
+combine echouait la validation watertight alors que chaque composante,
+isolee, etait individuellement valide.
+
+Solution generique (pas de detection de diagonale specifique, qui devrait
+etre refaite pour chaque nouvelle configuration degeneree possible) : tout
+ilot de cellules dont l'aire est sous ce plancher est simplement retire
+avant la triangulation -- comme le filtre equivalent deja utilise ailleurs
+dans le pipeline SVG (`MIN_CAP_PIECE_AREA_MM2`, cherry_moon). Valeur
+choisie pour depasser l'aire d'une seule cellule meme a la resolution la
+plus grossiere couramment utilisee dans l'app (preset "Draft", 0.6mm/px ->
+0.36mm2/cellule -- un seuil sous cette valeur ne filtrerait jamais un ilot
+d'une seule cellule, exactement le cas reel qui a motive ce correctif),
+tout en restant tres en dessous de la taille d'un vrai ilot voulu par
+l'utilisateur (point d'un "i", boucle d'un "%", element decoratif disjoint
+d'un logo) qui occupe toujours plusieurs mm2 meme a cette resolution
+grossiere -- ne supprime que le bruit numerique de bord, jamais un ilot
+reel."""
+
+
+def _drop_degenerate_cell_islands(cell_active: np.ndarray, pixel_area_mm2: float) -> np.ndarray:
+    """Retire les composantes connexes (4-connexite, partage d'arete --
+    seule connexite qui garantit un maillage manifold) de `cell_active`
+    dont l'aire est sous `MIN_CELL_ISLAND_AREA_MM2`. Ne fait rien si
+    `pixel_area_mm2` est nul/negatif (grille degenerescente, deja rejetee
+    ailleurs) ou si toutes les composantes sont deja assez grandes."""
+    if pixel_area_mm2 <= 0 or not cell_active.any():
+        return cell_active
+    labels, num = ndimage.label(cell_active, structure=ndimage.generate_binary_structure(2, 1))
+    if num <= 1:
+        return cell_active
+    sizes = ndimage.sum(cell_active, labels, index=range(1, num + 1))
+    min_cells = MIN_CELL_ISLAND_AREA_MM2 / pixel_area_mm2
+    keep_labels = {i + 1 for i, size in enumerate(sizes) if size >= min_cells}
+    if len(keep_labels) == num:
+        return cell_active
+    return np.isin(labels, list(keep_labels))
 
 
 def _side_strip(p: np.ndarray, q: np.ndarray, p_back: np.ndarray, q_back: np.ndarray) -> np.ndarray:
@@ -167,6 +218,14 @@ def build_mesh_from_heightfield(
         raise ValueError(
             "Masque insuffisant pour generer une geometrie : aucune cellule "
             "entierement active (zone trop petite ou trop fine pour la resolution courante)."
+        )
+
+    pixel_size_mm = width_mm / cols if cols > 0 else 0.0
+    cell_active = _drop_degenerate_cell_islands(cell_active, pixel_size_mm * pixel_size_mm)
+    if not cell_active.any():
+        raise ValueError(
+            "Masque insuffisant pour generer une geometrie : toutes les cellules actives "
+            "etaient des ilots degeneres sous le plancher d'aire minimal."
         )
 
     a = idx[:-1, :-1][cell_active]

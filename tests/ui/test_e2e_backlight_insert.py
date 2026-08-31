@@ -142,7 +142,7 @@ def test_backlight_insert_full_workflow_from_photo_to_reopened_project(qapp, tmp
         )
         main_window._on_export_clicked()
         written_stl = list(stl_dir.glob("*.stl"))
-        assert len(written_stl) == 2  # Blanc + Rose
+        assert len(written_stl) == 3  # Blanc + Rose + support sacrificiel de Rose
         for stl_path in written_stl:
             reloaded = trimesh.load(stl_path, process=True)
             assert reloaded.is_watertight

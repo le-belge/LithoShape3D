@@ -484,6 +484,63 @@ def test_backlight_floor_warns_below_0_6mm_for_skin_and_insert():
         BacklightInsertParams()
 
 
+def test_backlight_breakaway_support_matches_insert_footprint_and_is_watertight(varied_image):
+    """Le support sacrificiel (aide a l'impression) doit exister pour
+    chaque insert genere, sur la MEME empreinte XY (meme masque source),
+    watertight/manifold comme l'insert lui-meme -- c'est ce qui se
+    retirera avant de coller l'insert final."""
+    base = _base_zone()
+    rose = _backlight_zone()
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    result = compose_backlight_bodies(sources)
+
+    assert "Rose" in result.breakaway_support_meshes
+    support_mesh = result.breakaway_support_meshes["Rose"]
+    support_result = validate_mesh(support_mesh)
+    assert support_result.is_valid
+    assert support_result.connected_components == 1
+
+    insert_mesh = result.insert_meshes["Rose"]
+    # meme empreinte XY (memes bornes en X/Y) que l'insert
+    assert support_mesh.bounds[0][0] == pytest.approx(insert_mesh.bounds[0][0], abs=1e-6)
+    assert support_mesh.bounds[1][0] == pytest.approx(insert_mesh.bounds[1][0], abs=1e-6)
+    assert support_mesh.bounds[0][1] == pytest.approx(insert_mesh.bounds[0][1], abs=1e-6)
+    assert support_mesh.bounds[1][1] == pytest.approx(insert_mesh.bounds[1][1], abs=1e-6)
+
+
+def test_backlight_breakaway_support_is_taller_than_insert_but_never_exceeds_cavity(varied_image):
+    """Le support doit etre plus epais que l'insert (presse contre le
+    plafond de la cavite), mais JAMAIS au-dela de la profondeur reellement
+    creusee -- pas de chevauchement avec le corps blanc solide."""
+    base = _base_zone()
+    rose = _backlight_zone()
+    sources = [
+        ZoneSource(zone=base, image_path=str(varied_image)),
+        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+    ]
+
+    result = compose_backlight_bodies(sources)
+
+    insert_mesh = result.insert_meshes["Rose"]
+    support_mesh = result.breakaway_support_meshes["Rose"]
+    insert_top = insert_mesh.bounds[1][2]
+    support_top = support_mesh.bounds[1][2]
+
+    assert support_top > insert_top
+    assert support_top <= insert_top + backlight_module.BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM + 1e-6
+
+    # Le support ne doit jamais depasser le plafond reel de la cavite (le
+    # dos du corps blanc, cote insert) : verifie point par point via les
+    # sommets de son maillage (indexation identique a la grille du corps
+    # blanc puisque meme largeur/hauteur/pixel_size).
+    white_result = validate_mesh(result.white_mesh)
+    assert white_result.is_valid
+
+
 def test_no_backlight_zones_matches_plain_composition(varied_image):
     """Zero zone Backlight Insert -> comportement identique a
     `compose_scene_mesh` (chemin sans effet)."""

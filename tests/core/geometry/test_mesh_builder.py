@@ -158,3 +158,47 @@ def test_fully_active_mask_behaves_like_no_mask():
     mesh_without_mask = build_slab_mesh(heightmap, mask=None, params=params)
 
     assert np.allclose(mesh_with_mask.vertices, mesh_without_mask.vertices)
+
+
+def test_diagonal_staircase_mask_stays_watertight():
+    """Regression reelle (pas synthetique au hasard) : un masque de
+    selection IA (SAM2) sur une photo reelle produisait un mesh NON
+    watertight a cause d'une marche diagonale d'1 pixel de large dans le
+    contour -- la regle "4 coins actifs" de `cell_active` peut y laisser un
+    ilot d'1-2 cellules qui ne touche le reste de la forme que par un seul
+    sommet partage (pas une arete), creant une arete partagee par 4 faces
+    au lieu de 2. Reproduit ici avec un masque synthetique qui isole
+    exactement ce motif (bloc principal + une marche diagonale d'1 pixel) :
+    doit rester watertight grace au filtrage des ilots de cellules
+    degeneres (`MIN_CELL_ISLAND_AREA_MM2`, mesh_builder.py)."""
+    mask = np.zeros((10, 10), dtype=bool)
+    mask[0:4, 0:4] = True  # bloc principal 4x4
+    mask[4, 3] = True  # marche diagonale d'1 pixel : touche le bloc en (3,3) UNIQUEMENT en diagonale
+    mask[5, 4] = True  # deuxieme pas de la marche, meme motif
+
+    heightmap = Heightmap(values=np.full((10, 10), 0.5, dtype=np.float32))
+    params = _params(width_mm=20.0, height_mm=20.0, resolution=2.0)  # 2mm/px -> pixel_area=4mm2
+
+    mesh = build_slab_mesh(heightmap, mask=mask, params=params)
+    result = validate_mesh(mesh)
+    assert result.is_valid, result.issues()
+    assert result.connected_components == 1
+
+
+def test_min_cell_island_area_does_not_remove_a_real_disjoint_island():
+    """Garde-fou explicite : le filtre d'ilots degeneres ne doit JAMAIS
+    supprimer un ilot reellement voulu par l'utilisateur (point d'un "i",
+    element decoratif disjoint) -- seulement le bruit de bord sous
+    `MIN_CELL_ISLAND_AREA_MM2`. Ilot ici volontairement petit (2x2 px) mais
+    nettement au-dessus du plancher a cette resolution."""
+    mask = np.zeros((10, 10), dtype=bool)
+    mask[0:4, 0:4] = True  # bloc principal
+    mask[7:9, 7:9] = True  # ilot reel, disjoint (aucun contact, meme diagonal)
+
+    heightmap = Heightmap(values=np.full((10, 10), 0.5, dtype=np.float32))
+    params = _params(width_mm=20.0, height_mm=20.0, resolution=2.0)
+
+    mesh = build_slab_mesh(heightmap, mask=mask, params=params)
+    result = validate_mesh(mesh)
+    assert result.is_valid, result.issues()
+    assert result.connected_components == 2, "L'ilot reel a ete supprime a tort par le filtre."

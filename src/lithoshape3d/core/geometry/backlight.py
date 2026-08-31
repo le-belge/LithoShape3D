@@ -59,6 +59,21 @@ depasse l'epaisseur locale de la lithophanie a un pixel donne (zone tres
 fine/claire) -- degrade proprement vers "pas de cavite a ce pixel" (peau =
 epaisseur totale) plutot que de produire une geometrie negative/degeneree."""
 
+BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM = 0.08
+"""Surepaisseur (mm) du support sacrificiel par rapport a l'insert final,
+sur la MEME empreinte (`insert_mask`) -- presse fermement contre le
+plafond de la cavite (la peau blanche) pendant l'impression verticale,
+au lieu de laisser un vide sous la peau qui la fait s'affaisser/se
+perforer localement (cause dominante suspectee des deux echecs physiques
+documentes, voir CURRENT_STATE.md). A retirer (cassable, imprime en
+premier plan sur le meme materiau que l'insert ou un materiau facile a
+detacher) avant de coller le veritable insert colore a sa place. Valeur
+validee par un test physique reel (impression + inspection retro-eclairee
+sans perforation, voir examples/physical_validation/). Le support est
+plafonne a la profondeur REELLE de la cavite a chaque pixel (jamais plus)
+pour ne jamais chevaucher le corps blanc solide, meme aux points ou la
+marge disponible est plus etroite que cette surepaisseur."""
+
 
 @dataclass(frozen=True)
 class BacklightComposition:
@@ -69,6 +84,13 @@ class BacklightComposition:
     """{nom_materiau: mesh} -- fusionne par nom (meme convention que
     `partition_mesh_by_material`) si plusieurs zones Backlight Insert
     partagent un materiau."""
+    breakaway_support_meshes: dict[str, trimesh.Trimesh] = field(default_factory=dict)
+    """{nom_materiau: mesh} -- support sacrificiel par materiau, MEME
+    empreinte XY que `insert_meshes[nom]` mais legerement plus epais
+    (`BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM`) pour presser contre le plafond de
+    la cavite pendant l'impression verticale. A imprimer et retirer AVANT
+    de coller l'insert final -- jamais les deux en meme temps dans la
+    cavite (meme emplacement, cf. `three_mf_note` du protocole physique)."""
     warnings: list[str] = field(default_factory=list)
     """Zones trop etroites pour le jeu XY configure (aucun insert genere
     pour elles) -- jamais silencieux, cf. mission 0.4.1 section 7."""
@@ -170,6 +192,7 @@ def compose_backlight_bodies(
     pixel_size_mm = width_mm / cols
     back_z = np.zeros_like(z_final)
     insert_meshes: dict[str, trimesh.Trimesh] = {}
+    breakaway_support_meshes: dict[str, trimesh.Trimesh] = {}
     warnings: list[str] = []
 
     for source in zone_sources:
@@ -232,11 +255,35 @@ def compose_backlight_bodies(
         insert_front = insert_ramp * insert_thickness
         insert_mesh = build_mesh_from_heightfield(insert_front, insert_mask, width_mm, height_mm)
 
+        # Support sacrificiel (aide a l'impression) : meme empreinte que
+        # l'insert, presse contre le plafond de la cavite (`back_z[feasible]`,
+        # deja calcule ci-dessus) pour la soutenir pendant l'impression
+        # verticale -- jamais au-dela de la profondeur REELLEMENT creusee a
+        # chaque pixel, meme si `insert_thickness + surepaisseur` depasserait
+        # localement la marge disponible (evite tout chevauchement avec le
+        # corps blanc solide).
+        cavity_ceiling = cavity_ramp * candidate_back
+        support_front = np.minimum(
+            insert_front + BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM, cavity_ceiling
+        )
+        support_mesh = build_mesh_from_heightfield(support_front, insert_mask, width_mm, height_mm)
+
         name = zone.material.name
         if name in insert_meshes:
             insert_meshes[name] = trimesh.util.concatenate([insert_meshes[name], insert_mesh])
         else:
             insert_meshes[name] = insert_mesh
+        if name in breakaway_support_meshes:
+            breakaway_support_meshes[name] = trimesh.util.concatenate(
+                [breakaway_support_meshes[name], support_mesh]
+            )
+        else:
+            breakaway_support_meshes[name] = support_mesh
 
     white_mesh = build_mesh_from_heightfield(z_final, active_final, width_mm, height_mm, back_z=back_z)
-    return BacklightComposition(white_mesh=white_mesh, insert_meshes=insert_meshes, warnings=warnings)
+    return BacklightComposition(
+        white_mesh=white_mesh,
+        insert_meshes=insert_meshes,
+        breakaway_support_meshes=breakaway_support_meshes,
+        warnings=warnings,
+    )
