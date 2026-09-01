@@ -60,7 +60,11 @@ from lithoshape3d.core.geometry.shape import (
     build_shape_mask_from_image_array,
     count_connected_components,
 )
-from lithoshape3d.core.geometry.support import build_side_stabilizer_pair, build_support_mesh
+from lithoshape3d.core.geometry.support import (
+    build_side_stabilizer_pair,
+    build_support_mesh,
+    real_edge_profile,
+)
 from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import image_size
 from lithoshape3d.core.image.preprocessing import (
@@ -1703,7 +1707,35 @@ class MainWindow(QMainWindow):
             y_min = min(float(m.bounds[0][1]) for m in panel_meshes)
             y_max = max(float(m.bounds[1][1]) for m in panel_meshes)
             z_max = max(float(m.bounds[1][2]) for m in panel_meshes)
-            left, right = build_side_stabilizer_pair(x_max - x_min, y_min, y_max, z_max)
+
+            # Calage sur le bord REEL du panneau, cote par cote (pas la
+            # bbox globale) : une forme non rectangulaire (bord incline,
+            # amincissement local) peut faire que le bord gauche et le
+            # bord droit n'ont pas la meme epaisseur reelle ni le meme
+            # centre Z -- retour terrain : le stabilisateur droit peut
+            # toucher parfaitement pendant que le gauche ne touche pas,
+            # meme avec un code parfaitement symetrique, si le calage se
+            # fait sur une bbox globale qui ne represente pas fidelement
+            # chaque bord. Voir `real_edge_profile`.
+            try:
+                _, _, left_z_bottom, left_z_top = real_edge_profile(panel_meshes, "left")
+                left_ridge_center = (left_z_bottom + left_z_top) / 2.0
+            except ValueError:
+                left_ridge_center = None
+            try:
+                _, _, right_z_bottom, right_z_top = real_edge_profile(panel_meshes, "right")
+                right_ridge_center = (right_z_bottom + right_z_top) / 2.0
+            except ValueError:
+                right_ridge_center = None
+
+            left, right = build_side_stabilizer_pair(
+                x_max - x_min,
+                y_min,
+                y_max,
+                z_max,
+                left_ridge_center_z_mm=left_ridge_center,
+                right_ridge_center_z_mm=right_ridge_center,
+            )
             left.apply_translation([x_min, 0.0, 0.0])
             right.apply_translation([x_min, 0.0, 0.0])
             result["Stabilisateur gauche (detachable)"] = (left, (0.6, 0.6, 0.65))

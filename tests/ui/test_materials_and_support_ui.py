@@ -117,12 +117,14 @@ def test_materials_display_includes_two_detachable_side_stabilizers(main_window,
 
     # Jamais fusionnes au panneau (des fichiers separes a l'export) et
     # positionnes pour que les dents du gabarit (pas sa face large, cf.
-    # rotation dans support.py -- retour terrain utilisateur) affleurent
-    # exactement le bord gauche du panneau -- meme verification que
-    # test_support.py::test_side_stabilizer_teeth_touch_....
+    # rotation dans support.py -- retour terrain utilisateur) penetrent
+    # legerement dans le bord gauche du panneau (recouvrement volontaire,
+    # pas une simple tangence -- cf. `_STABILIZER_CONTACT_OVERLAP_MM`) --
+    # meme verification que test_support.py::test_side_stabilizer_teeth_....
+    overlap = 0.12
     panel_x_min = float(panel_mesh.bounds[0][0])
     section = left_mesh.section(plane_origin=[0, left_mesh.bounds[0][1] + 2, 0], plane_normal=[0, 1, 0])
-    assert section.vertices[:, 0].max() == pytest.approx(panel_x_min, abs=1e-3)
+    assert section.vertices[:, 0].max() == pytest.approx(panel_x_min + overlap, abs=1e-3)
 
 
 def test_export_routes_through_multi_file_when_stabilizers_enabled(main_window, tmp_path, monkeypatch):

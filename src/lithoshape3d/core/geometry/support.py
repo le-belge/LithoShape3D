@@ -223,6 +223,57 @@ deux corps ne se touchent jamais malgre un alignement X/Y par ailleurs
 correct. `build_side_stabilizer_mesh` recentre donc la nervure sur le
 MILIEU de l'epaisseur reelle du panneau (`panel_thickness_mm / 2`)."""
 
+_STABILIZER_CONTACT_OVERLAP_MM = 0.12
+"""Recouvrement X volontaire (pas une simple tangence) entre les dents et
+le bord du panneau -- retour terrain (mesure au regle du slicer) : meme
+apres correction de `_STABILIZER_RIDGE_DEPTH_MM`, un contact exactement
+affleurant (0.000mm) peut ne pas etre vu comme un vrai contact par le
+slicer (arrondi flottant a l'export 3MF/STL, notamment introduit par le
+miroir `apply_scale([-1,1,1])` du cote droit -- deux solides qui ne se
+recouvrent pas en volume peuvent finir separes de quelques microns a
+quelques centiemes de mm apres export, invisibles sur les mesures
+symboliques mais reels une fois le fichier charge). Documente aussi en
+tete de module (union manifold3d entre solides qui ne font qu'affleurer)
+-- meme risque ici bien que les stabilisateurs restent volontairement des
+corps separes (jamais fusionnes, detachables)."""
+
+
+def real_edge_profile(
+    meshes: list[trimesh.Trimesh], side: str, x_tolerance_mm: float = 1.0
+) -> tuple[float, float, float, float]:
+    """Bord REEL du panneau du cote demande (pas sa bbox globale) : les
+    stabilisateurs doivent affleurer la matiere qui existe vraiment a
+    X=x_min/x_max, pas une boite englobante qui peut etre plus large que
+    le panneau lui-meme si sa forme n'est pas un rectangle parfait (bord
+    incline, aminci localement, decoupe). Retourne
+    (y_bottom, y_top, z_bottom, z_top) mesures sur les sommets reels
+    situes a moins de `x_tolerance_mm` du bord concerne.
+
+    Si `meshes` est vide ou qu'aucun sommet n'est trouve dans la marge
+    (forme trop fine/anguleuse a cette tolerance), leve `ValueError` --
+    mieux vaut echouer explicitement que caler un stabilisateur sur des
+    donnees vides."""
+    if side not in ("left", "right"):
+        raise ValueError(f"side doit etre 'left' ou 'right', recu {side!r}.")
+    if not meshes:
+        raise ValueError("real_edge_profile: aucun mesh fourni.")
+
+    all_vertices = np.concatenate([m.vertices for m in meshes], axis=0)
+    x_ref = float(all_vertices[:, 0].min() if side == "left" else all_vertices[:, 0].max())
+    near = all_vertices[np.abs(all_vertices[:, 0] - x_ref) < x_tolerance_mm]
+    if len(near) == 0:
+        raise ValueError(
+            f"real_edge_profile: aucun sommet a moins de {x_tolerance_mm}mm du bord "
+            f"{side} (x_ref={x_ref}) -- forme trop etroite a cette tolerance ?"
+        )
+    return (
+        float(near[:, 1].min()),
+        float(near[:, 1].max()),
+        float(near[:, 2].min()),
+        float(near[:, 2].max()),
+    )
+
+
 _stabilizer_template_cache: trimesh.Trimesh | None = None
 
 
@@ -248,6 +299,9 @@ def build_side_stabilizer_mesh(
     y_top: float,
     side: str,
     panel_thickness_mm: float,
+    *,
+    ridge_center_z_mm: float | None = None,
+    contact_overlap_mm: float = _STABILIZER_CONTACT_OVERLAP_MM,
 ) -> trimesh.Trimesh:
     """Charge le gabarit "Lithophane Helper" (deja tourne pour presenter
     ses dents de contact le long de X, voir `_load_stabilizer_template`)
@@ -257,16 +311,27 @@ def build_side_stabilizer_mesh(
     l'echelle non uniforme changerait l'angle du coin et l'espacement
     des languettes).
 
-    Positionne pour que les dents affleurent le bord gauche
-    (`side="left"`, bord a X=0) ou droit (`side="right"`, bord a
-    X=`panel_width_mm` -- fourni par l'appelant via une translation,
-    cf. `build_side_stabilizer_pair`, point d'entree recommande).
+    Positionne pour que les dents affleurent (avec un leger recouvrement
+    volontaire, voir `contact_overlap_mm`) le bord gauche (`side="left"`,
+    bord a X=0) ou droit (`side="right"`, bord a X=`panel_width_mm` --
+    fourni par l'appelant via une translation, cf.
+    `build_side_stabilizer_pair`, point d'entree recommande).
 
     `panel_thickness_mm` (obligatoire, cf. bug reel documente sur
-    `_STABILIZER_RIDGE_DEPTH_MM`) : recentre la nervure de contact sur le
-    MILIEU de l'epaisseur reelle du panneau -- sans ce recalage, la
-    nervure reste a sa position native (profondeur 15mm), sans aucun
-    rapport avec ou le panneau existe reellement."""
+    `_STABILIZER_RIDGE_DEPTH_MM`) : epaisseur reelle du panneau AU BORD
+    CONCERNE (pas necessairement l'epaisseur globale/bbox -- voir
+    `real_edge_profile`, a utiliser en amont si le panneau n'est pas un
+    rectangle parfait). `ridge_center_z_mm` : override optionnel du
+    centre Z cible (sinon `panel_thickness_mm / 2`, suppose le panneau
+    a Z=0..panel_thickness_mm) -- utile si le bord reel du panneau a ce
+    cote n'est pas centre sur Z=0..panel_thickness_mm (ex. bord incline).
+
+    `contact_overlap_mm` (retour terrain, cf. `_STABILIZER_CONTACT_OVERLAP_MM`)
+    : recouvrement X volontaire, pas une simple tangence -- un contact
+    exactement affleurant (0.000mm) peut se retrouver separe de quelques
+    microns apres export (arrondi flottant, notamment introduit par le
+    miroir du cote droit), et donc ne pas etre vu comme un contact reel
+    une fois le fichier charge dans un slicer."""
     if y_top <= y_bottom:
         raise ValueError("y_top doit etre strictement superieur a y_bottom.")
     if side not in ("left", "right"):
@@ -284,17 +349,23 @@ def build_side_stabilizer_mesh(
     # hauteurs) et les DENTS ressortent periodiquement jusqu'a X positif
     # (bounds[1][0]) -- ce sont elles, pas le dos, qui doivent affleurer
     # le panneau. Decale donc pour amener la pointe des dents (pas le
-    # dos) exactement a X=0, le dos s'eloignant alors en X negatif.
+    # dos) a X=+contact_overlap_mm (un peu A L'INTERIEUR du panneau, pas
+    # exactement X=0 -- voir `contact_overlap_mm`), le dos s'eloignant
+    # alors en X negatif.
     tooth_reach = float(result.bounds[1][0])
-    ridge_z_target = panel_thickness_mm / 2.0
+    ridge_z_target = (
+        ridge_center_z_mm if ridge_center_z_mm is not None else panel_thickness_mm / 2.0
+    )
     result.apply_translation(
-        [-tooth_reach, y_bottom, ridge_z_target - _STABILIZER_RIDGE_DEPTH_MM]
+        [-tooth_reach + contact_overlap_mm, y_bottom, ridge_z_target - _STABILIZER_RIDGE_DEPTH_MM]
     )
 
-    # Position "gauche" par construction (dents a X=0, dos en X<0). Pour
-    # le bord droit, miroiter en X (dents restent a X=0, dos passe en
-    # X>0) -- `build_side_stabilizer_pair` translate ensuite ce resultat
-    # de panel_width_mm pour amener les dents au bord droit reel.
+    # Position "gauche" par construction (dents a X=+overlap, dos en
+    # X<0). Pour le bord droit, miroiter en X (dents restent a
+    # X=+overlap avant mirroir, donc a X=-overlap apres) --
+    # `build_side_stabilizer_pair` translate ensuite ce resultat de
+    # panel_width_mm pour amener les dents a panel_width_mm - overlap,
+    # legerement A L'INTERIEUR du bord droit reel.
     if side == "right":
         result.apply_scale([-1.0, 1.0, 1.0])
 
@@ -306,18 +377,43 @@ def build_side_stabilizer_pair(
     y_bottom: float,
     y_top: float,
     panel_thickness_mm: float,
+    *,
+    left_ridge_center_z_mm: float | None = None,
+    right_ridge_center_z_mm: float | None = None,
+    contact_overlap_mm: float = _STABILIZER_CONTACT_OVERLAP_MM,
 ) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     """Point d'entree recommande : construit et positionne les DEUX
-    stabilisateurs (gauche affleurant X=0, droit affleurant
-    X=`panel_width_mm`), prets a etre places tels quels a cote du panneau
-    (meme repere XYZ, aucun repositionnement manuel necessaire dans le
-    slicer -- meme convention que les autres corps generes par ce module).
+    stabilisateurs (gauche affleurant pres de X=0, droit affleurant pres
+    de X=`panel_width_mm`, avec un leger recouvrement volontaire -- voir
+    `contact_overlap_mm`), prets a etre places tels quels a cote du
+    panneau (meme repere XYZ, aucun repositionnement manuel necessaire
+    dans le slicer -- meme convention que les autres corps generes par ce
+    module).
 
-    `panel_thickness_mm` : epaisseur reelle du panneau (Z max), utilisee
-    pour recentrer la nervure de contact -- voir docstring de
-    `build_side_stabilizer_mesh` et `_STABILIZER_RIDGE_DEPTH_MM`."""
-    left = build_side_stabilizer_mesh(y_bottom, y_top, "left", panel_thickness_mm)
-    right = build_side_stabilizer_mesh(y_bottom, y_top, "right", panel_thickness_mm)
+    `panel_thickness_mm` : epaisseur par defaut (Z max globale) si aucun
+    override de cote n'est fourni. `left_ridge_center_z_mm` /
+    `right_ridge_center_z_mm` : centre Z cible INDEPENDANT par cote (cf.
+    retour terrain ChatGPT : le bord gauche et le bord droit d'un panneau
+    ne sont pas garantis symetriques -- inclinaison, amincissement local,
+    forme non rectangulaire -- donc chaque cote doit pouvoir etre recale
+    sur SA PROPRE geometrie reelle, voir `real_edge_profile`), sinon
+    `panel_thickness_mm / 2` pour les deux."""
+    left = build_side_stabilizer_mesh(
+        y_bottom,
+        y_top,
+        "left",
+        panel_thickness_mm,
+        ridge_center_z_mm=left_ridge_center_z_mm,
+        contact_overlap_mm=contact_overlap_mm,
+    )
+    right = build_side_stabilizer_mesh(
+        y_bottom,
+        y_top,
+        "right",
+        panel_thickness_mm,
+        ridge_center_z_mm=right_ridge_center_z_mm,
+        contact_overlap_mm=contact_overlap_mm,
+    )
     right.apply_translation([panel_width_mm, 0.0, 0.0])
     return left, right
 

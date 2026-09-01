@@ -163,24 +163,31 @@ def test_side_stabilizer_teeth_touch_the_panel_edges_periodically_never_beyond()
         panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0, panel_thickness_mm=2.65
     )
 
+    # Depuis l'ajout du recouvrement volontaire (retour terrain : une
+    # simple tangence peut ne pas etre vue comme un contact reel par le
+    # slicer, cf. `_STABILIZER_CONTACT_OVERLAP_MM`), les dents penetrent
+    # legerement DANS le panneau plutot que d'affleurer exactement X=0 /
+    # X=panel_width_mm.
+    overlap = 0.12
+
     left_contacts = [
         _contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)
     ]
     left_x = [x for x, _z in left_contacts]
-    assert any(x == pytest.approx(0.0, abs=1e-3) for x in left_x), (
-        "Aucune dent ne touche exactement X=0 sur le stabilisateur gauche."
+    assert any(x == pytest.approx(overlap, abs=1e-3) for x in left_x), (
+        "Aucune dent ne touche a la profondeur de recouvrement attendue sur le stabilisateur gauche."
     )
-    assert all(x <= 1e-6 for x in left_x), "Le stabilisateur gauche deborde dans le panneau."
+    assert all(x <= overlap + 1e-6 for x in left_x), "Le stabilisateur gauche deborde trop dans le panneau."
 
     right_contacts = [
         _contact_point_at_height(right, y, x_max=False) for y in np.linspace(2.0, 138.0, 12)
     ]
     right_x = [x for x, _z in right_contacts]
-    assert any(x == pytest.approx(panel_width, abs=1e-3) for x in right_x), (
-        "Aucune dent ne touche exactement X=panel_width_mm sur le stabilisateur droit."
+    assert any(x == pytest.approx(panel_width - overlap, abs=1e-3) for x in right_x), (
+        "Aucune dent ne touche a la profondeur de recouvrement attendue sur le stabilisateur droit."
     )
-    assert all(x >= panel_width - 1e-6 for x in right_x), (
-        "Le stabilisateur droit deborde dans le panneau."
+    assert all(x >= panel_width - overlap - 1e-6 for x in right_x), (
+        "Le stabilisateur droit deborde trop dans le panneau."
     )
 
 
@@ -201,9 +208,10 @@ def test_side_stabilizer_contact_ridge_is_aligned_with_panel_thickness_in_depth(
         panel_width_mm=100.0, y_bottom=0.0, y_top=140.0, panel_thickness_mm=panel_thickness
     )
 
+    overlap = 0.12
     contacts = [_contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)]
-    touching_zs = [z for x, z in contacts if x == pytest.approx(0.0, abs=1e-3)]
-    assert touching_zs, "Aucun point de contact (X=0) trouve -- verifier le motif periodique."
+    touching_zs = [z for x, z in contacts if x == pytest.approx(overlap, abs=1e-3)]
+    assert touching_zs, "Aucun point de contact trouve -- verifier le motif periodique."
     for z in touching_zs:
         assert -1e-6 <= z <= panel_thickness + 1e-6, (
             f"Nervure de contact a Z={z:.2f}mm, hors de l'epaisseur du panneau "
@@ -240,3 +248,69 @@ def test_side_stabilizer_depth_extent_matches_the_original_template_regardless_o
 def test_side_stabilizer_rejects_invalid_side():
     with pytest.raises(ValueError, match="side"):
         build_side_stabilizer_mesh(0.0, 100.0, side="top", panel_thickness_mm=2.65)
+
+
+def test_side_stabilizer_teeth_overlap_the_panel_edge_not_merely_tangent():
+    """Retour terrain (ChatGPT) : une simple tangence (0.000mm) peut ne
+    pas etre vue comme un vrai contact par le slicer (arrondi flottant a
+    l'export, notamment introduit par le miroir du cote droit). Les dents
+    doivent penetrer legerement DANS le panneau, pas seulement l'effleurer."""
+    panel_width = 100.0
+    left, right = build_side_stabilizer_pair(
+        panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0, panel_thickness_mm=2.65
+    )
+    assert left.bounds[1][0] > 1e-6, "Le stabilisateur gauche ne recouvre pas le panneau (simple tangence)."
+    assert right.bounds[0][0] < panel_width - 1e-6, (
+        "Le stabilisateur droit ne recouvre pas le panneau (simple tangence)."
+    )
+
+
+def test_real_edge_profile_uses_actual_vertices_not_global_bbox():
+    """`real_edge_profile` doit caler la nervure sur la matiere REELLEMENT
+    presente pres du bord concerne -- pas sur la bbox globale, qui peut
+    ne pas etre representative d'un panneau non rectangulaire (bord
+    incline, aminci localement)."""
+    import trimesh
+
+    from lithoshape3d.core.geometry.support import real_edge_profile
+
+    mesh = trimesh.creation.box(extents=[100.0, 140.0, 2.65])
+    mesh.apply_translation([50.0, 70.0, 1.325])
+
+    y_bottom, y_top, z_bottom, z_top = real_edge_profile([mesh], "left")
+    assert y_bottom == pytest.approx(0.0, abs=1e-3)
+    assert y_top == pytest.approx(140.0, abs=1e-3)
+    assert z_bottom == pytest.approx(0.0, abs=1e-3)
+    assert z_top == pytest.approx(2.65, abs=1e-3)
+
+
+def test_real_edge_profile_rejects_empty_meshes():
+    from lithoshape3d.core.geometry.support import real_edge_profile
+
+    with pytest.raises(ValueError):
+        real_edge_profile([], "left")
+
+
+def test_side_stabilizer_pair_accepts_independent_ridge_centers_per_side():
+    """Retour terrain : rien ne garantit que le bord gauche et le bord
+    droit d'un panneau non rectangulaire soient symetriques -- chaque
+    cote doit pouvoir etre recale independamment sur SA PROPRE epaisseur
+    reelle (cf. `real_edge_profile` + `left_ridge_center_z_mm` /
+    `right_ridge_center_z_mm`)."""
+    left, right = build_side_stabilizer_pair(
+        panel_width_mm=100.0,
+        y_bottom=0.0,
+        y_top=140.0,
+        panel_thickness_mm=2.65,
+        left_ridge_center_z_mm=1.0,
+        right_ridge_center_z_mm=5.0,
+    )
+    # Un override de centre par cote doit deplacer la plage Z ENTIERE de
+    # ce cote de exactement (override - centre par defaut) -- gauche et
+    # droite peuvent donc finir a des profondeurs differentes l'un de
+    # l'autre, chacun cale sur SA PROPRE geometrie reelle.
+    assert float(left.bounds[:, 2].mean()) == pytest.approx(1.0, abs=1e-3)
+    assert float(right.bounds[:, 2].mean()) == pytest.approx(5.0, abs=1e-3)
+    assert float(left.bounds[:, 2].mean()) != pytest.approx(
+        float(right.bounds[:, 2].mean()), abs=1e-3
+    )
