@@ -178,23 +178,41 @@ def build_support_mesh(
 # Geometrie du gabarit (mesuree directement sur le STL source, PAS
 # redessinee a la main -- voir `tests/core/geometry/test_support.py` pour
 # les mesures de validation) : coin triangulaire plein, base 30mm x hauteur
-# 100mm x epaisseur 5mm, avec une nervure de contact etroite (x=14-16mm,
-# donc centree sur la largeur) qui affleure periodiquement (~15mm
-# d'intervalle) sur toute la hauteur -- ce sont ces points de contact,
-# PAS le corps du coin, qui touchent le panneau.
+# 100mm x epaisseur 5mm dans son orientation NATIVE. Cette face plate
+# (30x100mm) n'est PAS le cote de contact -- confirme par une impression
+# reelle (photo utilisateur) : ce sont les languettes en "escalier"
+# (profil en dents, cf. coupe Y-Z a X=15mm natif) qui doivent toucher la
+# litho, pas la face large du coin. Le gabarit est donc tourne de 90°
+# autour de l'axe Y (hauteur) avant usage : l'ancienne epaisseur (5mm,
+# ancien Z) devient la nouvelle largeur de contact (nouveau X), et
+# l'ancienne largeur (30mm, ancien X) devient la profondeur du corps de
+# calage qui s'eloigne du panneau (nouveau Z) -- le coin triangulaire
+# stabilise sur le plateau via cette profondeur, tandis que seules les
+# dents de l'escalier (nouveau X, alternant 2mm/5mm periodiquement sur
+# toute la hauteur) viennent affleurer le bord du panneau.
 
 _STABILIZER_TEMPLATE_PATH = Path(__file__).parent / "assets" / "lithophane_helper_100mm.stl"
 _STABILIZER_TEMPLATE_NATIVE_HEIGHT_MM = 100.0
-_STABILIZER_TEMPLATE_CONTACT_X_MM = 15.0
-"""Position X (mm, repere local du gabarit) de la nervure de contact,
-mesuree par coupe transversale a plusieurs hauteurs (centre de la plage
-14-16mm) -- c'est ce point, pas un bord du gabarit, qui doit venir
-affleurer le panneau une fois positionne."""
+_STABILIZER_ROTATION = trimesh.transformations.rotation_matrix(
+    np.radians(90.0), [0.0, 1.0, 0.0], point=[0.0, 0.0, 0.0]
+)
+"""Rotation 90 deg autour de Y : ancien Z (epaisseur, 0-5mm, dents) ->
+nouveau X (contact) ; ancien X (largeur, 0-30mm, corps du coin) ->
+nouveau Z, neglige (voir `_STABILIZER_DEPTH_FLIP`)."""
+
+_STABILIZER_DEPTH_FLIP = np.diag([1.0, 1.0, -1.0, 1.0])
+"""Applique apres la rotation : le nouveau Z issu de la rotation est
+negatif (le corps du coin s'eloignait du panneau vers Z<0) -- inverse
+pour obtenir une profondeur positive (Z=0 au contact, Z croissant en
+s'eloignant), plus lisible/coherent avec le reste du module."""
 
 _stabilizer_template_cache: trimesh.Trimesh | None = None
 
 
 def _load_stabilizer_template() -> trimesh.Trimesh:
+    """Charge le gabarit, deja tourne pour presenter les dents de contact
+    (l'escalier) le long de l'axe X, pret a etre mis a l'echelle en Y et
+    positionne."""
     global _stabilizer_template_cache
     if _stabilizer_template_cache is None:
         mesh = trimesh.load(_STABILIZER_TEMPLATE_PATH, force="mesh")
@@ -202,6 +220,8 @@ def _load_stabilizer_template() -> trimesh.Trimesh:
             raise ValueError(
                 f"Gabarit stabilisateur lateral non watertight : {_STABILIZER_TEMPLATE_PATH}"
             )
+        mesh.apply_transform(_STABILIZER_ROTATION)
+        mesh.apply_transform(_STABILIZER_DEPTH_FLIP)
         _stabilizer_template_cache = mesh
     return _stabilizer_template_cache.copy()
 
@@ -211,13 +231,15 @@ def build_side_stabilizer_mesh(
     y_top: float,
     side: str,
 ) -> trimesh.Trimesh:
-    """Charge le gabarit "Lithophane Helper" et le met a l'echelle en
-    HAUTEUR SEULEMENT (axe Y, pour couvrir `y_top - y_bottom`) -- largeur
-    (30mm), epaisseur (5mm) et le profil de la nervure de contact restent
-    ceux du modele original, jamais deformes (une mise a l'echelle non
-    uniforme changerait l'angle du coin et l'espacement des languettes).
+    """Charge le gabarit "Lithophane Helper" (deja tourne pour presenter
+    ses dents de contact le long de X, voir `_load_stabilizer_template`)
+    et le met a l'echelle en HAUTEUR SEULEMENT (axe Y, pour couvrir
+    `y_top - y_bottom`) -- profondeur (30mm) et le profil des dents
+    restent ceux du modele original, jamais deformes (une mise a
+    l'echelle non uniforme changerait l'angle du coin et l'espacement
+    des languettes).
 
-    Positionne pour que la nervure de contact affleure le bord gauche
+    Positionne pour que les dents affleurent le bord gauche
     (`side="left"`, bord a X=0) ou droit (`side="right"`, bord a
     X=`panel_width_mm` -- fourni par l'appelant via une translation,
     cf. `build_side_stabilizer_pair`, point d'entree recommande)."""
@@ -232,10 +254,18 @@ def build_side_stabilizer_mesh(
     result = _load_stabilizer_template()
     result.apply_scale([1.0, scale_y, 1.0])
 
-    # Recale l'origine sur la nervure de contact (X) et le bas reel du
-    # panneau (Y), puis miroite en X pour le bord droit (le gabarit est
-    # deja oriente base-a-gauche/pointe-a-droite au niveau de la nervure).
-    result.apply_translation([-_STABILIZER_TEMPLATE_CONTACT_X_MM, y_bottom, 0.0])
+    # Apres rotation, X=0 est le DOS PLAT du gabarit (present a toutes les
+    # hauteurs) et les DENTS ressortent periodiquement jusqu'a X positif
+    # (bounds[1][0]) -- ce sont elles, pas le dos, qui doivent affleurer
+    # le panneau. Decale donc pour amener la pointe des dents (pas le
+    # dos) exactement a X=0, le dos s'eloignant alors en X negatif.
+    tooth_reach = float(result.bounds[1][0])
+    result.apply_translation([-tooth_reach, y_bottom, 0.0])
+
+    # Position "gauche" par construction (dents a X=0, dos en X<0). Pour
+    # le bord droit, miroiter en X (dents restent a X=0, dos passe en
+    # X>0) -- `build_side_stabilizer_pair` translate ensuite ce resultat
+    # de panel_width_mm pour amener les dents au bord droit reel.
     if side == "right":
         result.apply_scale([-1.0, 1.0, 1.0])
 

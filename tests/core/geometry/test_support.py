@@ -126,21 +126,17 @@ def test_support_fuses_with_a_shape_whose_lowest_point_is_above_y_zero(support_t
 # --------------------------------------------------------------------- #
 
 
-def _contact_rib_x_range(mesh, y: float, z_threshold: float = 3.0):
-    """Coupe transversale a la hauteur `y` : etendue X des points dont Z
-    depasse `z_threshold` -- isole la nervure de contact surelevee du
-    gabarit (le corps du coin lui-meme reste sous Z=2mm partout), seule
-    partie censee reellement affleurer le panneau. `None` si aucun point
-    haut a cette hauteur (creux entre deux languettes, motif periodique
-    attendu -- voir docstring de module)."""
+def _contact_x_at_height(mesh, y: float, *, x_max: bool):
+    """Coupe transversale a la hauteur `y` : X le plus proche du panneau
+    (max pour le stabilisateur gauche, min pour le droit -- apres
+    rotation du gabarit, ce sont les DENTS, pas le dos plat, qui
+    atteignent cette valeur, periodiquement le long de Y -- voir
+    docstring de module)."""
     section = mesh.section(plane_origin=[0, y, 0], plane_normal=[0, 1, 0])
     if section is None:
         return None
-    pts = section.vertices
-    high = pts[pts[:, 2] > z_threshold]
-    if not len(high):
-        return None
-    return float(high[:, 0].min()), float(high[:, 0].max())
+    pts = section.vertices[:, 0]
+    return float(pts.max() if x_max else pts.min())
 
 
 def test_side_stabilizer_pair_are_watertight_and_never_fused():
@@ -152,25 +148,28 @@ def test_side_stabilizer_pair_are_watertight_and_never_fused():
         assert result.connected_components == 1
 
 
-def test_side_stabilizer_contact_rib_touches_left_and_right_edges_of_the_panel():
-    """Le CORPS du coin triangulaire ne touche jamais le panneau (design
-    original -- seule la nervure de contact, surelevee, le fait par
-    endroits) : verifie sur plusieurs hauteurs que cette nervure traverse
-    bien X=0 (gauche) / X=panel_width_mm (droite), pas juste s'en approcher."""
+def test_side_stabilizer_teeth_touch_the_panel_edges_periodically_never_beyond():
+    """Apres rotation du gabarit (dents en contact, pas la face large du
+    coin -- retour terrain utilisateur), verifie sur plusieurs hauteurs :
+    les dents affleurent EXACTEMENT X=0 (gauche) / X=panel_width_mm
+    (droite) a certaines hauteurs (motif periodique), et le corps ne
+    depasse JAMAIS ce bord (jamais de chevauchement dans le panneau)."""
     panel_width = 100.0
     left, right = build_side_stabilizer_pair(panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0)
 
-    contacts_left = [_contact_rib_x_range(left, y) for y in np.linspace(2.0, 138.0, 12)]
-    contacts_left = [c for c in contacts_left if c is not None]
-    assert contacts_left, "Aucune nervure de contact detectee sur le stabilisateur gauche."
-    for x_min, x_max in contacts_left:
-        assert x_min <= 0.0 <= x_max
+    left_contacts = [_contact_x_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)]
+    assert any(x == pytest.approx(0.0, abs=1e-3) for x in left_contacts), (
+        "Aucune dent ne touche exactement X=0 sur le stabilisateur gauche."
+    )
+    assert all(x <= 1e-6 for x in left_contacts), "Le stabilisateur gauche deborde dans le panneau."
 
-    contacts_right = [_contact_rib_x_range(right, y) for y in np.linspace(2.0, 138.0, 12)]
-    contacts_right = [c for c in contacts_right if c is not None]
-    assert contacts_right, "Aucune nervure de contact detectee sur le stabilisateur droit."
-    for x_min, x_max in contacts_right:
-        assert x_min <= panel_width <= x_max
+    right_contacts = [_contact_x_at_height(right, y, x_max=False) for y in np.linspace(2.0, 138.0, 12)]
+    assert any(x == pytest.approx(panel_width, abs=1e-3) for x in right_contacts), (
+        "Aucune dent ne touche exactement X=panel_width_mm sur le stabilisateur droit."
+    )
+    assert all(x >= panel_width - 1e-6 for x in right_contacts), (
+        "Le stabilisateur droit deborde dans le panneau."
+    )
 
 
 def test_side_stabilizer_spans_the_full_panel_height():
@@ -184,13 +183,14 @@ def test_side_stabilizer_spans_the_full_panel_height():
     assert left.bounds[1][1] == pytest.approx(y_top, abs=1e-3)
 
 
-def test_side_stabilizer_thickness_matches_the_original_template_regardless_of_panel():
-    """Le gabarit reel a sa propre epaisseur fixe (5mm) -- contrairement a
-    l'ancienne approximation, elle ne suit JAMAIS l'epaisseur du panneau
-    (une lithophanie fine de 0.8mm n'a pas besoin d'un stabilisateur aussi
+def test_side_stabilizer_depth_matches_the_original_template_regardless_of_panel():
+    """Le gabarit reel a sa propre profondeur fixe (30mm, ancien axe
+    largeur du coin avant rotation) -- contrairement a l'ancienne
+    approximation, elle ne suit JAMAIS l'epaisseur du panneau (une
+    lithophanie fine de 0.8mm n'a pas besoin d'un stabilisateur aussi
     fin et fragile)."""
     thin_panel = build_side_stabilizer_mesh(0.0, 100.0, side="left")
-    assert thin_panel.bounds[1][2] == pytest.approx(5.0, abs=1e-6)
+    assert thin_panel.bounds[1][2] == pytest.approx(30.0, abs=1e-3)
 
 
 def test_side_stabilizer_rejects_invalid_side():

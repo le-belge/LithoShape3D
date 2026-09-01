@@ -2,6 +2,7 @@
 Materiaux, export multi-materiaux."""
 
 import numpy as np
+import pytest
 
 from lithoshape3d.core.geometry.composition import compose_scene_mesh
 from lithoshape3d.core.scene.models import CompositionMode, ReliefMode, SupportType
@@ -115,16 +116,13 @@ def test_materials_display_includes_two_detachable_side_stabilizers(main_window,
         assert result.is_valid
 
     # Jamais fusionnes au panneau (des fichiers separes a l'export) et
-    # positionnes pour que la nervure de contact du gabarit affleure bien
-    # les bords du panneau -- meme verification que
-    # test_support.py::test_side_stabilizer_contact_rib_touches_... (le
-    # corps large du coin peut, lui, empieter visuellement sur
-    # l'empreinte du panneau dans un aperçu combine : sans consequence,
-    # les deux corps restent exportes comme des fichiers STL distincts).
-    panel_x_min, panel_x_max = float(panel_mesh.bounds[0][0]), float(panel_mesh.bounds[1][0])
+    # positionnes pour que les dents du gabarit (pas sa face large, cf.
+    # rotation dans support.py -- retour terrain utilisateur) affleurent
+    # exactement le bord gauche du panneau -- meme verification que
+    # test_support.py::test_side_stabilizer_teeth_touch_....
+    panel_x_min = float(panel_mesh.bounds[0][0])
     section = left_mesh.section(plane_origin=[0, left_mesh.bounds[0][1] + 2, 0], plane_normal=[0, 1, 0])
-    high = section.vertices[section.vertices[:, 2] > 3]
-    assert high[:, 0].min() <= panel_x_min <= high[:, 0].max()
+    assert section.vertices[:, 0].max() == pytest.approx(panel_x_min, abs=1e-3)
 
 
 def test_export_routes_through_multi_file_when_stabilizers_enabled(main_window, tmp_path, monkeypatch):
