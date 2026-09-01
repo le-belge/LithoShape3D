@@ -114,11 +114,17 @@ def test_materials_display_includes_two_detachable_side_stabilizers(main_window,
         result = validate_mesh(mesh)
         assert result.is_valid
 
-    # jamais fusionnes au panneau : aucun chevauchement de leurs boites
-    # englobantes en X avec le panneau (ils l'effleurent, ne le penetrent pas).
+    # Jamais fusionnes au panneau (des fichiers separes a l'export) et
+    # positionnes pour que la nervure de contact du gabarit affleure bien
+    # les bords du panneau -- meme verification que
+    # test_support.py::test_side_stabilizer_contact_rib_touches_... (le
+    # corps large du coin peut, lui, empieter visuellement sur
+    # l'empreinte du panneau dans un aperçu combine : sans consequence,
+    # les deux corps restent exportes comme des fichiers STL distincts).
     panel_x_min, panel_x_max = float(panel_mesh.bounds[0][0]), float(panel_mesh.bounds[1][0])
-    assert float(left_mesh.bounds[1][0]) <= panel_x_min + 1e-6
-    assert float(right_mesh.bounds[0][0]) >= panel_x_max - 1e-6
+    section = left_mesh.section(plane_origin=[0, left_mesh.bounds[0][1] + 2, 0], plane_normal=[0, 1, 0])
+    high = section.vertices[section.vertices[:, 2] > 3]
+    assert high[:, 0].min() <= panel_x_min <= high[:, 0].max()
 
 
 def test_export_routes_through_multi_file_when_stabilizers_enabled(main_window, tmp_path, monkeypatch):

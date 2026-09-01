@@ -126,10 +126,25 @@ def test_support_fuses_with_a_shape_whose_lowest_point_is_above_y_zero(support_t
 # --------------------------------------------------------------------- #
 
 
+def _contact_rib_x_range(mesh, y: float, z_threshold: float = 3.0):
+    """Coupe transversale a la hauteur `y` : etendue X des points dont Z
+    depasse `z_threshold` -- isole la nervure de contact surelevee du
+    gabarit (le corps du coin lui-meme reste sous Z=2mm partout), seule
+    partie censee reellement affleurer le panneau. `None` si aucun point
+    haut a cette hauteur (creux entre deux languettes, motif periodique
+    attendu -- voir docstring de module)."""
+    section = mesh.section(plane_origin=[0, y, 0], plane_normal=[0, 1, 0])
+    if section is None:
+        return None
+    pts = section.vertices
+    high = pts[pts[:, 2] > z_threshold]
+    if not len(high):
+        return None
+    return float(high[:, 0].min()), float(high[:, 0].max())
+
+
 def test_side_stabilizer_pair_are_watertight_and_never_fused():
-    left, right = build_side_stabilizer_pair(
-        panel_width_mm=100.0, y_bottom=0.0, y_top=140.0, panel_max_thickness_mm=3.2
-    )
+    left, right = build_side_stabilizer_pair(panel_width_mm=100.0, y_bottom=0.0, y_top=140.0)
 
     for mesh in (left, right):
         result = validate_mesh(mesh)
@@ -137,45 +152,47 @@ def test_side_stabilizer_pair_are_watertight_and_never_fused():
         assert result.connected_components == 1
 
 
-def test_side_stabilizer_pair_touches_left_and_right_edges_of_the_panel():
+def test_side_stabilizer_contact_rib_touches_left_and_right_edges_of_the_panel():
+    """Le CORPS du coin triangulaire ne touche jamais le panneau (design
+    original -- seule la nervure de contact, surelevee, le fait par
+    endroits) : verifie sur plusieurs hauteurs que cette nervure traverse
+    bien X=0 (gauche) / X=panel_width_mm (droite), pas juste s'en approcher."""
     panel_width = 100.0
-    left, right = build_side_stabilizer_pair(
-        panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0, panel_max_thickness_mm=3.2
-    )
+    left, right = build_side_stabilizer_pair(panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0)
 
-    # Le stabilisateur gauche touche X=0 (bord gauche du panneau), jamais au-dela.
-    assert left.bounds[1][0] == pytest.approx(0.0, abs=1e-6)
-    assert left.bounds[0][0] < 0.0
+    contacts_left = [_contact_rib_x_range(left, y) for y in np.linspace(2.0, 138.0, 12)]
+    contacts_left = [c for c in contacts_left if c is not None]
+    assert contacts_left, "Aucune nervure de contact detectee sur le stabilisateur gauche."
+    for x_min, x_max in contacts_left:
+        assert x_min <= 0.0 <= x_max
 
-    # Le stabilisateur droit touche X=panel_width_mm (bord droit), jamais au-dela.
-    assert right.bounds[0][0] == pytest.approx(panel_width, abs=1e-6)
-    assert right.bounds[1][0] > panel_width
+    contacts_right = [_contact_rib_x_range(right, y) for y in np.linspace(2.0, 138.0, 12)]
+    contacts_right = [c for c in contacts_right if c is not None]
+    assert contacts_right, "Aucune nervure de contact detectee sur le stabilisateur droit."
+    for x_min, x_max in contacts_right:
+        assert x_min <= panel_width <= x_max
 
 
 def test_side_stabilizer_spans_the_full_panel_height():
     y_bottom, y_top = 5.0, 145.0
-    left, _right = build_side_stabilizer_pair(
-        panel_width_mm=100.0, y_bottom=y_bottom, y_top=y_top, panel_max_thickness_mm=3.2
-    )
+    left, _right = build_side_stabilizer_pair(panel_width_mm=100.0, y_bottom=y_bottom, y_top=y_top)
 
-    assert left.bounds[0][1] == pytest.approx(y_bottom, abs=1e-6)
-    assert left.bounds[1][1] == pytest.approx(y_top, abs=1e-6)
-
-
-def test_side_stabilizer_thickness_is_never_below_the_minimum_floor():
-    """Un panneau tres fin ne doit pas produire un stabilisateur lui-meme
-    trop fin pour etre solide/detachable proprement."""
-    left = build_side_stabilizer_mesh(0.0, 100.0, panel_max_thickness_mm=0.8, side="left")
-
-    assert left.bounds[1][2] >= 3.0  # _STABILIZER_MIN_THICKNESS_MM
+    # Tolerance non-triviale : le gabarit source a lui-meme un residu
+    # sub-micrometrique sur ses propres bornes (STL tel que fourni, avant
+    # toute transformation) -- voir bounds natifs mesures dans le module.
+    assert left.bounds[0][1] == pytest.approx(y_bottom, abs=1e-3)
+    assert left.bounds[1][1] == pytest.approx(y_top, abs=1e-3)
 
 
-def test_side_stabilizer_thickness_matches_a_thick_panel():
-    left = build_side_stabilizer_mesh(0.0, 100.0, panel_max_thickness_mm=6.0, side="left")
-
-    assert left.bounds[1][2] == pytest.approx(6.0, abs=1e-6)
+def test_side_stabilizer_thickness_matches_the_original_template_regardless_of_panel():
+    """Le gabarit reel a sa propre epaisseur fixe (5mm) -- contrairement a
+    l'ancienne approximation, elle ne suit JAMAIS l'epaisseur du panneau
+    (une lithophanie fine de 0.8mm n'a pas besoin d'un stabilisateur aussi
+    fin et fragile)."""
+    thin_panel = build_side_stabilizer_mesh(0.0, 100.0, side="left")
+    assert thin_panel.bounds[1][2] == pytest.approx(5.0, abs=1e-6)
 
 
 def test_side_stabilizer_rejects_invalid_side():
     with pytest.raises(ValueError, match="side"):
-        build_side_stabilizer_mesh(0.0, 100.0, panel_max_thickness_mm=3.0, side="top")
+        build_side_stabilizer_mesh(0.0, 100.0, side="top")

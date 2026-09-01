@@ -27,7 +27,15 @@ hidden_imports = (
     + collect_submodules("trimesh")
 )
 
-datas = collect_data_files("pyvista") + collect_data_files("vtkmodules")
+datas = (
+    collect_data_files("pyvista")
+    + collect_data_files("vtkmodules")
+    # Gabarits geometriques non-.py du package (ex. lithophane_helper_100mm.stl
+    # pour les stabilisateurs lateraux, core/geometry/assets/) -- doivent
+    # etre embarques dans le bundle, sinon build_side_stabilizer_pair echoue
+    # a l'execution dans l'app packagee.
+    + collect_data_files("lithoshape3d")
+)
 
 a = Analysis(
     ["../src/lithoshape3d/cli.py"],

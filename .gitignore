@@ -17,3 +17,6 @@ htmlcov/
 *.obj
 packaging/build/
 packaging/dist/
+
+# Gabarit source legitime (pas un artefact de build) -- voir ATTRIBUTION.md
+!src/lithoshape3d/core/geometry/assets/*.stl

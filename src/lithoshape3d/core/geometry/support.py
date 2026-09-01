@@ -24,6 +24,8 @@ au resultat imprime une base stable, y compris pour un affichage/impression
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import trimesh
 
@@ -162,8 +164,9 @@ def build_support_mesh(
 # Stabilisateurs lateraux (aide a l'impression, jamais fusionnes)
 # --------------------------------------------------------------------- #
 #
-# Inspires du modele communautaire "Lithophane Helper" (madpenguin,
-# Thingiverse #2718124) : une lithophanie fine et large imprimee DEBOUT
+# Modele communautaire "Lithophane Helper" (madpenguin, Thingiverse
+# #2718124, CC-BY -- voir assets/ATTRIBUTION.md) utilise TEL QUEL comme
+# gabarit, pas reinvente : une lithophanie fine et large imprimee DEBOUT
 # peut vibrer/flechir localement pendant l'impression (bruit visible dans
 # les couches). Contrairement au pied (`build_support_mesh`, fusionne au
 # panneau), un stabilisateur lateral reste un corps SEPARE : il vient
@@ -171,96 +174,70 @@ def build_support_mesh(
 # ni arriere), pour le maintenir sans y adherer -- a detacher a la pince
 # une fois l'impression terminee, comme l'original. Deux exemplaires
 # (gauche/droite), a placer de part et d'autre du panneau dans le slicer.
+#
+# Geometrie du gabarit (mesuree directement sur le STL source, PAS
+# redessinee a la main -- voir `tests/core/geometry/test_support.py` pour
+# les mesures de validation) : coin triangulaire plein, base 30mm x hauteur
+# 100mm x epaisseur 5mm, avec une nervure de contact etroite (x=14-16mm,
+# donc centree sur la largeur) qui affleure periodiquement (~15mm
+# d'intervalle) sur toute la hauteur -- ce sont ces points de contact,
+# PAS le corps du coin, qui touchent le panneau.
 
-_STABILIZER_BASE_DEPTH_MM = 25.0
-"""Profondeur (mm, direction X, s'eloignant du panneau) du corps principal
-du stabilisateur -- assure une base large et stable au contact du
-plateau, comme le socle triangulaire du modele de reference."""
+_STABILIZER_TEMPLATE_PATH = Path(__file__).parent / "assets" / "lithophane_helper_100mm.stl"
+_STABILIZER_TEMPLATE_NATIVE_HEIGHT_MM = 100.0
+_STABILIZER_TEMPLATE_CONTACT_X_MM = 15.0
+"""Position X (mm, repere local du gabarit) de la nervure de contact,
+mesuree par coupe transversale a plusieurs hauteurs (centre de la plage
+14-16mm) -- c'est ce point, pas un bord du gabarit, qui doit venir
+affleurer le panneau une fois positionne."""
 
-_STABILIZER_CLEARANCE_MM = 0.2
-"""Retrait (mm) du corps principal par rapport au bord du panneau : SEULES
-les languettes (`_STABILIZER_TAB_COUNT`) viennent reellement au contact --
-le corps principal ne touche jamais le panneau sur toute sa hauteur (ce
-qui le collerait/le rendrait difficile a detacher), meme convention que le
-modele de reference ("Tabs should just make contact... helpers can be cut
-away when print is completed")."""
+_stabilizer_template_cache: trimesh.Trimesh | None = None
 
-_STABILIZER_TAB_COUNT = 6
-"""Nombre de languettes de contact reparties sur la hauteur du panneau."""
 
-_STABILIZER_TAB_HEIGHT_MM = 3.0
-"""Hauteur (mm, direction Y) de chaque languette de contact."""
-
-_STABILIZER_MIN_THICKNESS_MM = 3.0
-"""Epaisseur Z minimale du stabilisateur, meme si le panneau lui-meme est
-plus fin -- une languette trop fine casserait/vibrerait elle-meme au lieu
-de stabiliser le panneau."""
+def _load_stabilizer_template() -> trimesh.Trimesh:
+    global _stabilizer_template_cache
+    if _stabilizer_template_cache is None:
+        mesh = trimesh.load(_STABILIZER_TEMPLATE_PATH, force="mesh")
+        if not mesh.is_watertight:
+            raise ValueError(
+                f"Gabarit stabilisateur lateral non watertight : {_STABILIZER_TEMPLATE_PATH}"
+            )
+        _stabilizer_template_cache = mesh
+    return _stabilizer_template_cache.copy()
 
 
 def build_side_stabilizer_mesh(
     y_bottom: float,
     y_top: float,
-    panel_max_thickness_mm: float,
     side: str,
-    *,
-    base_depth_mm: float = _STABILIZER_BASE_DEPTH_MM,
-    clearance_mm: float = _STABILIZER_CLEARANCE_MM,
-    tab_count: int = _STABILIZER_TAB_COUNT,
-    tab_height_mm: float = _STABILIZER_TAB_HEIGHT_MM,
 ) -> trimesh.Trimesh:
-    """Construit UN stabilisateur lateral independant (jamais fusionne au
-    panneau), positionne pour effleurer le bord gauche (`side="left"`, bord
-    a X=0) ou droit (`side="right"`, bord a X=panel_width_mm -- fourni via
-    `y_bottom`/`y_top` deja exprimes dans le repere du panneau, ce bord
-    n'a pas besoin d'etre precise ici : l'appelant translate le resultat
-    de `panel_width_mm` pour le cote droit, cf. `build_side_stabilizer_pair`).
+    """Charge le gabarit "Lithophane Helper" et le met a l'echelle en
+    HAUTEUR SEULEMENT (axe Y, pour couvrir `y_top - y_bottom`) -- largeur
+    (30mm), epaisseur (5mm) et le profil de la nervure de contact restent
+    ceux du modele original, jamais deformes (une mise a l'echelle non
+    uniforme changerait l'angle du coin et l'espacement des languettes).
 
-    Genere par defaut a X<=0 (touche a X=0) : translater de `panel_width_mm`
-    ET miroiter en X pour le bord droit (fait par
-    `build_side_stabilizer_pair`, qui reste le point d'entree recommande).
-
-    `y_bottom`/`y_top` : etendue Y reelle du panneau (pas forcement
-    [0, height_mm] pour une Shape non rectangulaire) -- les languettes sont
-    reparties sur cette plage. `panel_max_thickness_mm` : epaisseur Z du
-    stabilisateur (au moins `_STABILIZER_MIN_THICKNESS_MM`, pour rester
-    solide independamment de l'epaisseur fine du panneau)."""
-    if tab_count < 1:
-        raise ValueError("tab_count doit etre >= 1.")
+    Positionne pour que la nervure de contact affleure le bord gauche
+    (`side="left"`, bord a X=0) ou droit (`side="right"`, bord a
+    X=`panel_width_mm` -- fourni par l'appelant via une translation,
+    cf. `build_side_stabilizer_pair`, point d'entree recommande)."""
     if y_top <= y_bottom:
         raise ValueError("y_top doit etre strictement superieur a y_bottom.")
+    if side not in ("left", "right"):
+        raise ValueError(f"side doit etre 'left' ou 'right', recu {side!r}.")
 
-    thickness_mm = max(panel_max_thickness_mm, _STABILIZER_MIN_THICKNESS_MM)
     height_mm = y_top - y_bottom
+    scale_y = height_mm / _STABILIZER_TEMPLATE_NATIVE_HEIGHT_MM
 
-    # Corps principal : recule de `clearance_mm`, ne touche jamais le
-    # panneau -- seules les languettes le font.
-    body_extents = [base_depth_mm - clearance_mm, height_mm, thickness_mm]
-    body = trimesh.creation.box(extents=body_extents)
-    body.apply_translation(
-        [-(base_depth_mm - clearance_mm) / 2.0 - clearance_mm, (y_bottom + y_top) / 2.0, thickness_mm / 2.0]
-    )
+    result = _load_stabilizer_template()
+    result.apply_scale([1.0, scale_y, 1.0])
 
-    # Languettes : pontent le retrait (`clearance_mm`) jusqu'a X=0 (bord du
-    # panneau), reparties uniformement sur la hauteur.
-    tab_centers = np.linspace(
-        y_bottom + tab_height_mm, y_top - tab_height_mm, tab_count
-    ) if tab_count > 1 else [(y_bottom + y_top) / 2.0]
-    tab_extents = [clearance_mm, tab_height_mm, thickness_mm]
-    tabs = []
-    for y_center in tab_centers:
-        tab = trimesh.creation.box(extents=tab_extents)
-        tab.apply_translation([-clearance_mm / 2.0, float(y_center), thickness_mm / 2.0])
-        tabs.append(tab)
-
-    merged = _to_manifold(body)
-    for tab in tabs:
-        merged = merged + _to_manifold(tab)
-    result = _from_manifold(merged)
-
+    # Recale l'origine sur la nervure de contact (X) et le bas reel du
+    # panneau (Y), puis miroite en X pour le bord droit (le gabarit est
+    # deja oriente base-a-gauche/pointe-a-droite au niveau de la nervure).
+    result.apply_translation([-_STABILIZER_TEMPLATE_CONTACT_X_MM, y_bottom, 0.0])
     if side == "right":
         result.apply_scale([-1.0, 1.0, 1.0])
-    elif side != "left":
-        raise ValueError(f"side doit etre 'left' ou 'right', recu {side!r}.")
 
     return result
 
@@ -269,16 +246,19 @@ def build_side_stabilizer_pair(
     panel_width_mm: float,
     y_bottom: float,
     y_top: float,
-    panel_max_thickness_mm: float,
-    **kwargs,
+    panel_max_thickness_mm: float | None = None,
 ) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     """Point d'entree recommande : construit et positionne les DEUX
-    stabilisateurs (gauche a X=0, droit a X=`panel_width_mm`), prets a
-    etre places tels quels a cote du panneau (meme repere XYZ, aucun
-    repositionnement manuel necessaire dans le slicer -- meme convention
-    que les autres corps generes par ce module)."""
-    left = build_side_stabilizer_mesh(y_bottom, y_top, panel_max_thickness_mm, "left", **kwargs)
-    right = build_side_stabilizer_mesh(y_bottom, y_top, panel_max_thickness_mm, "right", **kwargs)
+    stabilisateurs (gauche affleurant X=0, droit affleurant
+    X=`panel_width_mm`), prets a etre places tels quels a cote du panneau
+    (meme repere XYZ, aucun repositionnement manuel necessaire dans le
+    slicer -- meme convention que les autres corps generes par ce module).
+
+    `panel_max_thickness_mm` est accepte pour compatibilite ascendante
+    (ancienne signature) mais ignore : le gabarit reel a sa propre
+    epaisseur fixe (5mm), independante de celle du panneau."""
+    left = build_side_stabilizer_mesh(y_bottom, y_top, "left")
+    right = build_side_stabilizer_mesh(y_bottom, y_top, "right")
     right.apply_translation([panel_width_mm, 0.0, 0.0])
     return left, right
 
