@@ -116,16 +116,25 @@ class BacklightInsertParams:
     """Jeu lateral (pas en profondeur) entre le contour de l'insert et la
     paroi de la cavite qui l'accueille, pour qu'il s'insere sans forcer.
     Presets : Serre=0.10, Standard=0.20 (par defaut), Facile=0.30."""
-    chamfer_width_mm: float = 0.4
-    """Largeur (en XY, mesuree depuis le bord du masque interieur) de la
-    rampe de transition entre "pas de cavite" (paroi arriere pleine, Z=0)
-    et la profondeur de cavite complete -- transforme la marche verticale
-    a la jonction cavite/insert en paroi en pente (chanfrein), imprimable
-    et assemblable proprement en FDM sans support. Milieu de la plage
-    discrete visee (0.3-0.5mm) suggeree lors de la conception de ce
-    chanfrein -- meme convention documentaire que les autres constantes de
-    ce fichier (a valider par de vraies impressions). 0.0 desactive le
-    chanfrein (retour a la marche abrupte d'origine)."""
+    pocket_extra_depth_mm: float = 0.08
+    """Surepaisseur (mm) de la poche creusee au dos par rapport a
+    `insert_thickness_mm` -- `pocket_depth = insert_thickness_mm +
+    pocket_extra_depth_mm`. Contrairement a l'ancienne cavite (qui suivait
+    le relief local jusqu'a `white_skin_thickness_mm`), la poche reste
+    volontairement peu profonde et quasi constante : moins de matiere
+    retiree, moins de fragilite en facade. Valeur validee par impression
+    physique reelle (cf. `examples/physical_validation/`)."""
+    transition_width_mm: float = 1.20
+    """Largeur (en XY, mesuree depuis le bord de l'empreinte de l'insert)
+    de la rampe de transition entre la poche (profondeur `pocket_depth`)
+    et le dos plein de la lithophanie (Z=0) -- "soft organic pocket" :
+    evite la marche quasi verticale qui produit des micro-surfaces
+    fragiles au slicer sur un contour organique. Contrairement a l'ancien
+    chanfrein, l'insert lui-meme reste a epaisseur CONSTANTE (jamais
+    rampe) -- seule la cavite qui l'entoure est progressive. Valeur
+    validee par impression physique reelle (cf.
+    `examples/physical_validation/`). 0.0 desactive la rampe (la cavite se
+    limite alors exactement a l'empreinte de l'insert, marche abrupte)."""
 
     def __post_init__(self) -> None:
         # Plancher "jamais impose silencieusement" (cf.

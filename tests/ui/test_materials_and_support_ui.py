@@ -121,7 +121,7 @@ def test_materials_display_includes_two_detachable_side_stabilizers(main_window,
     # legerement dans le bord gauche du panneau (recouvrement volontaire,
     # pas une simple tangence -- cf. `_STABILIZER_CONTACT_OVERLAP_MM`) --
     # meme verification que test_support.py::test_side_stabilizer_teeth_....
-    overlap = 0.12
+    overlap = 0.06
     panel_x_min = float(panel_mesh.bounds[0][0])
     section = left_mesh.section(plane_origin=[0, left_mesh.bounds[0][1] + 2, 0], plane_normal=[0, 1, 0])
     assert section.vertices[:, 0].max() == pytest.approx(panel_x_min + overlap, abs=1e-3)

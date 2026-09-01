@@ -385,37 +385,55 @@ def test_backlight_stl_round_trip_stays_watertight(tmp_path, varied_image):
     assert reloaded_insert.is_watertight
 
 
-def test_backlight_chamfer_produces_progressive_back_z_ramp(varied_image):
-    """La marche verticale d'origine entre "pas de cavite" (Z=0) et
-    "cavite pleine profondeur" doit desormais etre une rampe progressive :
-    il doit exister des valeurs de back_z STRICTEMENT entre 0 et
-    z_final-skin pres du bord de la zone (preuve que la rampe existe
-    reellement, pas seulement les deux extremes)."""
-    base = _base_zone()
-    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=0.6, chamfer_width_mm=0.4)
+def test_backlight_transition_produces_progressive_back_z_ramp(tmp_path):
+    """"Soft organic pocket" (retour terrain, validation physique) : le
+    contour de la poche doit rester une rampe progressive vers le dos
+    plein (Z=0), pas une marche abrupte -- il doit exister des back_z
+    STRICTEMENT entre 0 et la profondeur de poche pleine pres du bord de
+    l'insert (preuve que la rampe existe reellement, pas seulement les
+    deux extremes). Resolution fine + masque circulaire (meme raison que
+    le Test D xy_clearance) : a 1mm/px sur un carre a bords droits, la
+    distance au bord saute directement au-dela de `transition_width_mm`
+    (1.2mm par defaut), ne laissant aucune valeur intermediaire observable."""
+    fine_rows, fine_cols = 300, 300
+    fine_width_mm = fine_height_mm = 60.0
+    yy, xx = np.mgrid[0:fine_rows, 0:fine_cols]
+    array = ((xx * 255) // fine_cols).astype(np.uint8)
+    image_path = tmp_path / "fine_gradient.png"
+    Image.fromarray(array, mode="L").save(image_path)
+
+    params = GeometryParameters(
+        width_mm=fine_width_mm, height_mm=fine_height_mm,
+        min_thickness_mm=1.5, max_thickness_mm=3.0, resolution=fine_width_mm / fine_cols,
+    )
+    base = Zone(name="Base", composition_mode=CompositionMode.BASE, geometry_params=params)
+    cy, cx, radius = 150, 150, 100
+    fine_mask = (((yy - cy) ** 2 + (xx - cx) ** 2) <= radius**2).astype(np.float32)
+
+    rose = _backlight_zone(
+        white_skin_thickness_mm=0.6, insert_thickness_mm=0.6,
+        pocket_extra_depth_mm=0.08, transition_width_mm=1.2,
+    )
     sources = [
-        ZoneSource(zone=base, image_path=str(varied_image)),
-        ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
+        ZoneSource(zone=base, image_path=str(image_path)),
+        ZoneSource(zone=rose, image_path=str(image_path), mask=fine_mask),
     ]
 
-    _result, front_z, back_z, _active = _compose_and_capture_heightfields(sources)
+    _result, _front_z, back_z, _active = _compose_and_capture_heightfields(sources)
 
     carved = back_z > 0.0
     assert carved.any()
-    candidate_back = np.clip(front_z - 0.6, 0.0, None)
-    full_depth = candidate_back[carved].max()
-    intermediate = back_z[carved & (back_z > 1e-6) & (back_z < full_depth - 1e-6)]
-    assert intermediate.size > 0, "il doit exister des back_z strictement entre 0 et la profondeur pleine"
+    pocket_depth = 0.6 + 0.08
+    intermediate = back_z[carved & (back_z > 1e-6) & (back_z < pocket_depth - 1e-6)]
+    assert intermediate.size > 0, "il doit exister des back_z strictement entre 0 et la profondeur de poche pleine"
 
 
-def test_backlight_chamfer_produces_progressive_insert_thickness_ramp(tmp_path):
-    """Meme verification cote insert : l'epaisseur doit varier de facon
-    progressive pres du bord (valeurs strictement entre 0 et
-    insert_thickness_mm), pas juste un mur vertical net. Resolution fine
-    dediee (0.2mm/px, comme le Test D xy_clearance) : a 1mm/px la distance
-    au bord saute directement de 0 (bord) a >=1.0mm (premier pixel
-    interieur), ce qui depasse deja `chamfer_width_mm` par defaut (0.4mm)
-    et ne laisse aucune place a une valeur intermediaire observable."""
+def test_backlight_insert_thickness_stays_constant_never_ramped(tmp_path):
+    """"Soft organic pocket" : contrairement a l'ancien chanfrein, l'insert
+    lui-meme doit rester a EPAISSEUR CONSTANTE sur toute son empreinte --
+    seule la cavite qui l'entoure (dans le corps blanc) est progressive.
+    Aucune valeur de Z strictement entre 0 et `insert_thickness_mm` ne
+    doit exister sur l'insert."""
     fine_rows, fine_cols = 300, 300
     fine_width_mm = fine_height_mm = 60.0
     yy, xx = np.mgrid[0:fine_rows, 0:fine_cols]
@@ -432,7 +450,9 @@ def test_backlight_chamfer_produces_progressive_insert_thickness_ramp(tmp_path):
     fine_mask = (((yy - cy) ** 2 + (xx - cx) ** 2) <= radius**2).astype(np.float32)
 
     insert_thickness = 0.6
-    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=insert_thickness, chamfer_width_mm=0.4)
+    rose = _backlight_zone(
+        white_skin_thickness_mm=0.6, insert_thickness_mm=insert_thickness, transition_width_mm=1.2,
+    )
     sources = [
         ZoneSource(zone=base, image_path=str(image_path)),
         ZoneSource(zone=rose, image_path=str(image_path), mask=fine_mask),
@@ -442,15 +462,19 @@ def test_backlight_chamfer_produces_progressive_insert_thickness_ramp(tmp_path):
     insert_mesh = result.insert_meshes["Rose"]
     top_z = insert_mesh.vertices[:, 2]
     intermediate = top_z[(top_z > 1e-6) & (top_z < insert_thickness - 1e-6)]
-    assert intermediate.size > 0, "il doit exister des epaisseurs d'insert strictement entre 0 et l'epaisseur pleine"
+    assert intermediate.size == 0, "l'insert ne doit jamais avoir d'epaisseur intermediaire (jamais rampe)"
 
 
-def test_backlight_zero_chamfer_stays_close_to_original_abrupt_step(varied_image):
-    """`chamfer_width_mm=0` doit redonner un comportement proche de l'ancien
-    (marche quasi abrupte) : back_z vaut soit 0, soit la profondeur pleine
-    partout dans la zone -- pas de regression brutale pour ce cas limite."""
+def test_backlight_zero_transition_confines_pocket_to_insert_footprint(varied_image):
+    """`transition_width_mm=0` doit desactiver la rampe : la poche se
+    limite alors exactement a l'empreinte de l'insert (marche abrupte),
+    chaque point creuse a la profondeur de poche pleine (ou moins si
+    plafonne par l'epaisseur locale disponible)."""
     base = _base_zone()
-    rose = _backlight_zone(white_skin_thickness_mm=0.6, insert_thickness_mm=0.6, chamfer_width_mm=0.0)
+    rose = _backlight_zone(
+        white_skin_thickness_mm=0.6, insert_thickness_mm=0.6,
+        pocket_extra_depth_mm=0.08, transition_width_mm=0.0,
+    )
     sources = [
         ZoneSource(zone=base, image_path=str(varied_image)),
         ZoneSource(zone=rose, image_path=str(varied_image), mask=_rose_mask()),
@@ -460,10 +484,10 @@ def test_backlight_zero_chamfer_stays_close_to_original_abrupt_step(varied_image
 
     carved = back_z > 0.0
     assert carved.any()
-    candidate_back = np.clip(front_z - 0.6, 0.0, None)
-    # avec chanfrein desactive, back_z == candidate_back partout ou creuse
-    # (rampe constante a 1.0) -- comportement identique a l'ancien code.
-    np.testing.assert_allclose(back_z[carved], candidate_back[carved], atol=1e-6)
+    pocket_depth = 0.6 + 0.08
+    max_back = np.clip(front_z - 0.6, 0.0, None)
+    expected = np.minimum(max_back, pocket_depth)
+    np.testing.assert_allclose(back_z[carved], expected[carved], atol=1e-6)
 
 
 def test_backlight_floor_warns_below_0_6mm_for_skin_and_insert():
@@ -531,7 +555,7 @@ def test_backlight_breakaway_support_is_taller_than_insert_but_never_exceeds_cav
     support_top = support_mesh.bounds[1][2]
 
     assert support_top > insert_top
-    assert support_top <= insert_top + backlight_module.BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM + 1e-6
+    assert support_top <= insert_top + rose.backlight_insert.pocket_extra_depth_mm + 1e-6
 
     # Le support ne doit jamais depasser le plafond reel de la cavite (le
     # dos du corps blanc, cote insert) : verifie point par point via les

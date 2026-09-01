@@ -16,25 +16,23 @@ donc pose CONTRE le dos (Z=[0, insert_thickness_mm]) et la peau blanche
 occupe le haut de la plage [z_final-skin, z_final] -- entre les deux, un
 vide (la cavite) que l'insert vient (partiellement) combler.
 
-Jonction cavite/insert (chanfrein, retour terrain post-0.4.1) : la marche
-verticale d'origine entre "pas de cavite" et "cavite pleine profondeur"
-(idem cote insert entre "pas d'insert" et "insert pleine epaisseur") est
-difficile a imprimer/assembler proprement en FDM. Les deux profils sont
-donc rampes lineairement sur `chamfer_width_mm` a partir du bord de leur
-propre masque (cf. `_chamfer_ramp` et son usage dans
-`compose_backlight_bodies`), sans nouveau parametre de maillage : seule la
-carte de hauteur varie, le meme `build_mesh_from_heightfield` fait le
-reste. Cette rampe reste bornee au domaine deja juge `feasible` par le
-garde-fou existant -- elle ne fait que lisser une transition deja valide,
-jamais deborder dans une zone jugee trop fine.
+"Soft organic pocket" (retour terrain, validation physique reelle -- voir
+`examples/physical_validation/`) : contrairement a l'ancien chanfrein
+(deux rampes lineaires independantes sur la cavite ET sur l'insert,
+suivant tout le relief local jusqu'a `white_skin_thickness_mm`), la
+cavite reste desormais volontairement PEU PROFONDE et quasi constante
+(`pocket_depth = insert_thickness_mm + pocket_extra_depth_mm`, pas
+`z_final - skin`) : moins de matiere retiree, moins de fragilite en
+facade. Seule une fine rampe de transition (`transition_width_mm`,
+`smoothstep`) autour du contour de l'insert ramene progressivement cette
+poche vers le dos plein (Z=0) -- l'insert lui-meme reste a EPAISSEUR
+CONSTANTE (jamais rampe). Voir `_apply_soft_organic_pocket`,
+`_build_insert_mesh` (nettoyage topologique par tentatives successives)
+et `BacklightInsertParams.transition_width_mm`/`pocket_extra_depth_mm`.
 
-Limite connue (a documenter cote utilisateur) : le contour de la cavite
-(bord de `feasible`) et celui de l'insert (bord de `insert_mask`, erode de
-`xy_clearance_mm` par rapport a `feasible`) ne coincident PAS en XY -- deux
-rampes independantes sur deux contours decales ne peuvent donc s'aligner
-parfaitement pixel pour pixel ; l'alignement visuel du chanfrein
-cavite/insert reste approximatif, a l'echelle de `xy_clearance_mm` +
-`chamfer_width_mm`."""
+Les points juges non `feasible` (trop fins pour loger peau + insert, cf.
+plus bas) ne sont JAMAIS creuses, quelle que soit la rampe -- la facade y
+reste pleine epaisseur, jamais un trou."""
 
 from __future__ import annotations
 
@@ -59,20 +57,14 @@ depasse l'epaisseur locale de la lithophanie a un pixel donne (zone tres
 fine/claire) -- degrade proprement vers "pas de cavite a ce pixel" (peau =
 epaisseur totale) plutot que de produire une geometrie negative/degeneree."""
 
-BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM = 0.08
-"""Surepaisseur (mm) du support sacrificiel par rapport a l'insert final,
-sur la MEME empreinte (`insert_mask`) -- presse fermement contre le
-plafond de la cavite (la peau blanche) pendant l'impression verticale,
-au lieu de laisser un vide sous la peau qui la fait s'affaisser/se
-perforer localement (cause dominante suspectee des deux echecs physiques
-documentes, voir CURRENT_STATE.md). A retirer (cassable, imprime en
-premier plan sur le meme materiau que l'insert ou un materiau facile a
-detacher) avant de coller le veritable insert colore a sa place. Valeur
-validee par un test physique reel (impression + inspection retro-eclairee
-sans perforation, voir examples/physical_validation/). Le support est
-plafonne a la profondeur REELLE de la cavite a chaque pixel (jamais plus)
-pour ne jamais chevaucher le corps blanc solide, meme aux points ou la
-marge disponible est plus etroite que cette surepaisseur."""
+# Le support sacrificiel (aide a l'impression) est desormais dimensionne
+# directement par `BacklightInsertParams.pocket_extra_depth_mm` (meme
+# grandeur que la surepaisseur de la poche elle-meme, cf.
+# `compose_backlight_bodies`) plutot que par une constante de module fixe :
+# la poche etant maintenant a profondeur quasi constante (pas suivant le
+# relief local), le support peut se caler EXACTEMENT sur `pocket_depth`
+# (meme empreinte que l'insert, plafonne a la profondeur reellement
+# creusee a chaque pixel) sans avoir besoin d'une marge separee.
 
 
 @dataclass(frozen=True)
@@ -87,10 +79,11 @@ class BacklightComposition:
     breakaway_support_meshes: dict[str, trimesh.Trimesh] = field(default_factory=dict)
     """{nom_materiau: mesh} -- support sacrificiel par materiau, MEME
     empreinte XY que `insert_meshes[nom]` mais legerement plus epais
-    (`BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM`) pour presser contre le plafond de
-    la cavite pendant l'impression verticale. A imprimer et retirer AVANT
-    de coller l'insert final -- jamais les deux en meme temps dans la
-    cavite (meme emplacement, cf. `three_mf_note` du protocole physique)."""
+    (`BacklightInsertParams.pocket_extra_depth_mm`) pour presser contre le
+    plafond de la cavite pendant l'impression verticale. A imprimer et
+    retirer AVANT de coller l'insert final -- jamais les deux en meme
+    temps dans la cavite (meme emplacement, cf. `three_mf_note` du
+    protocole physique)."""
     warnings: list[str] = field(default_factory=list)
     """Zones trop etroites pour le jeu XY configure (aucun insert genere
     pour elles) -- jamais silencieux, cf. mission 0.4.1 section 7."""
@@ -141,27 +134,107 @@ def _erode_by_mm(mask: np.ndarray, clearance_mm: float, pixel_size_mm: float) ->
     return distance_mm > clearance_mm
 
 
-def _chamfer_ramp(mask: np.ndarray, chamfer_width_mm: float, pixel_size_mm: float, zone_name: str) -> tuple[np.ndarray, list[str]]:
-    """Rampe 0->1 depuis le bord de `mask` (0 pile au bord, 1 a partir de
-    `chamfer_width_mm` a l'interieur) -- meme technique de carte de distance
-    que `_erode_by_mm`, mais utilisee comme facteur d'interpolation continu
-    plutot que comme seuil binaire. `chamfer_width_mm<=0` degenere en rampe
-    constante a 1.0 (comportement d'origine, marche abrupte). Signale (sans
-    bloquer) quand une zone est trop etroite pour jamais atteindre un fond
-    plat (aucun pixel a distance >= chamfer_width_mm de son propre bord) :
-    la cavite/l'insert restent alors entierement en pente."""
-    warnings_out: list[str] = []
-    if chamfer_width_mm <= 0 or pixel_size_mm <= 0 or not mask.any():
-        return np.ones_like(mask, dtype=np.float32), warnings_out
-    distance_mm = ndimage.distance_transform_edt(mask) * pixel_size_mm
-    ramp = np.clip(distance_mm / chamfer_width_mm, 0.0, 1.0).astype(np.float32)
-    if not np.any(distance_mm[mask] >= chamfer_width_mm):
-        warnings_out.append(
-            f"Zone '{zone_name}' : trop etroite pour un chanfrein complet de "
-            f"{chamfer_width_mm:.2f}mm -- la cavite/l'insert restent entierement en pente "
-            "(pas de fond plat)."
-        )
-    return ramp, warnings_out
+def _clean_insert_mask_for_mesh(mask: np.ndarray) -> np.ndarray:
+    """Supprime les micro-contacts d'un pixel qui rendent certains masques
+    reels non-manifold une fois extrudes en insert.
+
+    Le jeu XY reste la source principale de retrait. Cette ouverture binaire
+    est seulement une regularisation topologique apres retrait : elle evite
+    les aretes partagees par plus de deux faces sans introduire de logique
+    specifique au contenu de l'image ou au materiau teste."""
+    if not mask.any():
+        return mask
+    return ndimage.binary_opening(mask)
+
+
+def _build_insert_mesh(
+    insert_mask: np.ndarray,
+    insert_thickness: float,
+    width_mm: float,
+    height_mm: float,
+) -> tuple[trimesh.Trimesh | None, np.ndarray, int]:
+    """Construit un insert a EPAISSEUR CONSTANTE (jamais rampee, cf. note de
+    module) et nettoie son masque seulement si necessaire (retente jusqu'a
+    4 fois avec une ouverture binaire supplementaire si le premier maillage
+    n'est pas watertight -- cf. `_clean_insert_mask_for_mesh`)."""
+    if not insert_mask.any():
+        return None, insert_mask, 0
+
+    candidate = insert_mask
+    removed_total = 0
+    for _attempt in range(4):
+        insert_front = np.full(candidate.shape, insert_thickness, dtype=np.float32)
+        try:
+            insert_mesh = build_mesh_from_heightfield(insert_front, candidate, width_mm, height_mm)
+        except ValueError:
+            return None, candidate, removed_total
+
+        if insert_mesh.is_watertight:
+            return insert_mesh, candidate, removed_total
+
+        cleaned = _clean_insert_mask_for_mesh(candidate)
+        removed_total += int(candidate.sum() - cleaned.sum())
+        if not cleaned.any() or np.array_equal(cleaned, candidate):
+            return None, cleaned, removed_total
+        candidate = cleaned
+
+    return None, candidate, removed_total
+
+
+def _smoothstep(values: np.ndarray) -> np.ndarray:
+    clipped = np.clip(values, 0.0, 1.0)
+    return clipped * clipped * (3.0 - (2.0 * clipped))
+
+
+def _apply_soft_organic_pocket(
+    back_z: np.ndarray,
+    z_final: np.ndarray,
+    feasible: np.ndarray,
+    insert_mask: np.ndarray,
+    *,
+    skin: float,
+    insert_thickness: float,
+    transition_width_mm: float,
+    pocket_extra_depth_mm: float,
+    pixel_size_mm: float,
+) -> np.ndarray:
+    """Creuse une poche organique imprimable avec une rampe autour du
+    contour (retour terrain, validation physique reelle -- voir note de
+    module). Le centre du logement reste plat, a une profondeur quasi
+    fixe (`pocket_depth`, PAS suivant le relief local) ; le contour revient
+    progressivement vers le dos plein de la lithophanie. On evite ainsi la
+    marche quasi verticale qui genere des micro-surfaces fragiles dans le
+    slicer sur les masques organiques.
+
+    Toujours plafonne par `z_final - skin` (via `feasible`, deja garanti
+    par l'appelant) : la peau reelle ne descend jamais sous `skin`, meme
+    au bord de la zone juste assez epaisse."""
+    carved = np.zeros_like(feasible, dtype=bool)
+    if not insert_mask.any():
+        return carved
+
+    max_back = np.clip(z_final - skin, 0.0, None)
+    max_back = np.clip(np.minimum(max_back, z_final - _MIN_SKIN_RESIDUAL_MM), 0.0, None)
+    pocket_depth = insert_thickness + max(0.0, pocket_extra_depth_mm)
+
+    full_depth = np.minimum(max_back, pocket_depth)
+    back_z[insert_mask] = np.maximum(back_z[insert_mask], full_depth[insert_mask])
+    carved |= insert_mask
+
+    if transition_width_mm <= 0.0 or pixel_size_mm <= 0.0:
+        return carved
+
+    outside_distance_mm = ndimage.distance_transform_edt(~insert_mask) * pixel_size_mm
+    transition = feasible & ~insert_mask & (outside_distance_mm <= transition_width_mm)
+    if not transition.any():
+        return carved
+
+    progress = 1.0 - (outside_distance_mm / transition_width_mm)
+    transition_depth = pocket_depth * _smoothstep(progress)
+    transition_depth = np.minimum(max_back, transition_depth)
+    back_z[transition] = np.maximum(back_z[transition], transition_depth[transition])
+    carved |= transition
+    return carved
 
 
 def compose_backlight_bodies(
@@ -242,31 +315,44 @@ def compose_backlight_bodies(
             )
             continue
 
-        candidate_back = np.clip(z_final - skin, 0.0, None)
-        candidate_back = np.clip(np.minimum(candidate_back, z_final - _MIN_SKIN_RESIDUAL_MM), 0.0, None)
-
-        chamfer_width = max(params.chamfer_width_mm, 0.0)
-        cavity_ramp, cavity_ramp_warnings = _chamfer_ramp(feasible, chamfer_width, pixel_size_mm, zone.name)
-        warnings.extend(cavity_ramp_warnings)
-        back_z[feasible] = (cavity_ramp * candidate_back)[feasible]
-
-        insert_ramp, insert_ramp_warnings = _chamfer_ramp(insert_mask, chamfer_width, pixel_size_mm, zone.name)
-        warnings.extend(insert_ramp_warnings)
-        insert_front = insert_ramp * insert_thickness
-        insert_mesh = build_mesh_from_heightfield(insert_front, insert_mask, width_mm, height_mm)
-
-        # Support sacrificiel (aide a l'impression) : meme empreinte que
-        # l'insert, presse contre le plafond de la cavite (`back_z[feasible]`,
-        # deja calcule ci-dessus) pour la soutenir pendant l'impression
-        # verticale -- jamais au-dela de la profondeur REELLEMENT creusee a
-        # chaque pixel, meme si `insert_thickness + surepaisseur` depasserait
-        # localement la marge disponible (evite tout chevauchement avec le
-        # corps blanc solide).
-        cavity_ceiling = cavity_ramp * candidate_back
-        support_front = np.minimum(
-            insert_front + BREAKAWAY_SUPPORT_EXTRA_DEPTH_MM, cavity_ceiling
+        insert_mesh, cleaned_mask, removed_points = _build_insert_mesh(
+            insert_mask, insert_thickness, width_mm, height_mm
         )
-        support_mesh = build_mesh_from_heightfield(support_front, insert_mask, width_mm, height_mm)
+        if insert_mesh is None:
+            warnings.append(
+                f"Zone '{zone.name}' : insert impossible a mailler apres nettoyage "
+                "topologique -- aucun insert genere."
+            )
+            continue
+        if removed_points > 0:
+            warnings.append(
+                f"Zone '{zone.name}' : {removed_points} micro-point(s) retires de l'insert "
+                "pour eviter une topologie non-manifold."
+            )
+
+        pocket_extra_depth = max(params.pocket_extra_depth_mm, 0.0)
+        transition_width = max(params.transition_width_mm, 0.0)
+        _apply_soft_organic_pocket(
+            back_z,
+            z_final,
+            feasible,
+            cleaned_mask,
+            skin=skin,
+            insert_thickness=insert_thickness,
+            transition_width_mm=transition_width,
+            pocket_extra_depth_mm=pocket_extra_depth,
+            pixel_size_mm=pixel_size_mm,
+        )
+
+        # Support sacrificiel (aide a l'impression) : MEME empreinte que
+        # l'insert nettoye, a la profondeur de poche exacte (`pocket_depth`,
+        # cf. point 7 du protocole physique -- support_clearance=0.0) --
+        # plafonne par `back_z` deja calcule ci-dessus (la profondeur
+        # REELLEMENT creusee a chaque pixel), pour ne jamais chevaucher le
+        # corps blanc solide meme si la marge locale est plus etroite.
+        pocket_depth = insert_thickness + pocket_extra_depth
+        support_front = np.minimum(np.full_like(back_z, pocket_depth), back_z)
+        support_mesh = build_mesh_from_heightfield(support_front, cleaned_mask, width_mm, height_mm)
 
         name = zone.material.name
         if name in insert_meshes:

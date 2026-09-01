@@ -168,7 +168,7 @@ def test_side_stabilizer_teeth_touch_the_panel_edges_periodically_never_beyond()
     # slicer, cf. `_STABILIZER_CONTACT_OVERLAP_MM`), les dents penetrent
     # legerement DANS le panneau plutot que d'affleurer exactement X=0 /
     # X=panel_width_mm.
-    overlap = 0.12
+    overlap = 0.06
 
     left_contacts = [
         _contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)
@@ -208,7 +208,7 @@ def test_side_stabilizer_contact_ridge_is_aligned_with_panel_thickness_in_depth(
         panel_width_mm=100.0, y_bottom=0.0, y_top=140.0, panel_thickness_mm=panel_thickness
     )
 
-    overlap = 0.12
+    overlap = 0.06
     contacts = [_contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)]
     touching_zs = [z for x, z in contacts if x == pytest.approx(overlap, abs=1e-3)]
     assert touching_zs, "Aucun point de contact trouve -- verifier le motif periodique."

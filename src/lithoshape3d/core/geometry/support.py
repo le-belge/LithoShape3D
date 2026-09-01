@@ -223,7 +223,7 @@ deux corps ne se touchent jamais malgre un alignement X/Y par ailleurs
 correct. `build_side_stabilizer_mesh` recentre donc la nervure sur le
 MILIEU de l'epaisseur reelle du panneau (`panel_thickness_mm / 2`)."""
 
-_STABILIZER_CONTACT_OVERLAP_MM = 0.12
+_STABILIZER_CONTACT_OVERLAP_MM = 0.06
 """Recouvrement X volontaire (pas une simple tangence) entre les dents et
 le bord du panneau -- retour terrain (mesure au regle du slicer) : meme
 apres correction de `_STABILIZER_RIDGE_DEPTH_MM`, un contact exactement
@@ -235,7 +235,13 @@ quelques centiemes de mm apres export, invisibles sur les mesures
 symboliques mais reels une fois le fichier charge). Documente aussi en
 tete de module (union manifold3d entre solides qui ne font qu'affleurer)
 -- meme risque ici bien que les stabilisateurs restent volontairement des
-corps separes (jamais fusionnes, detachables)."""
+corps separes (jamais fusionnes, detachables).
+
+Volontairement modeste (0.06mm, pas 0.12mm comme dans un premier essai) :
+assez pour garantir un recouvrement volumique reel malgre l'arrondi
+flottant, mais assez faible pour rester detachable a la pince sans
+effort excessif -- retour terrain utilisateur (crainte de supports
+colles trop fort)."""
 
 
 def real_edge_profile(
