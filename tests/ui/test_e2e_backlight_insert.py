@@ -11,6 +11,7 @@ optionnellement, par tests/ai/segmentation/test_sam2_coreml_backend.py)."""
 import time
 
 import numpy as np
+import pytest
 import pyvista as pv
 import trimesh
 from PIL import Image
@@ -243,5 +244,86 @@ def test_backlight_insert_single_zone_same_material_name_keeps_white_body_visibl
         assert white_mesh is not insert_mesh
         assert validate_mesh(white_mesh).is_valid
         assert validate_mesh(insert_mesh).is_valid
+    finally:
+        main_window.plotter.close()
+
+
+def test_backlight_couleur_mode_shows_white_body_and_true_insert_color(qapp, tmp_path, monkeypatch):
+    """Mode "Backlight couleur" (DisplayMode.BACKLIGHT_INSERT_PREVIEW) :
+    corps blanc retro-eclaire et insert dans sa vraie couleur materiau
+    doivent tous les deux etre des acteurs visibles simultanement dans le
+    viewer, et la couleur appliquee a l'insert doit etre celle du materiau
+    de la zone (pas une couleur generique)."""
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.warning", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.critical", lambda *a, **k: None)
+
+    main_window = MainWindow(plotter=pv.Plotter(off_screen=True))
+    try:
+        image_path = tmp_path / "femme_rose.png"
+        _make_woman_with_rose_photo(image_path)
+        main_window._load_image(str(image_path))
+        main_window.resolution_spin.setValue(1.0)
+        base_zone = main_window._active_zone()
+        base_zone.material.name = "Blanc"
+
+        main_window._on_new_zone_clicked()
+        rose_zone = main_window._active_zone()
+        rose_zone.composition_mode = CompositionMode.ADD
+        _select_rose_with_ai(main_window, qapp, rose_zone, str(image_path))
+        rose_zone.material.name = "Rose"
+        rose_zone.material.color = (0.85, 0.08, 0.28)
+
+        main_window._refresh_zones_list()
+        main_window.zones_list.setCurrentRow(main_window.zones_list.count() - 1)
+        main_window._on_zone_selection_changed()
+        idx = main_window.color_strategy_combo.findData(ColorStrategy.BACKLIGHT_INSERT)
+        main_window.color_strategy_combo.setCurrentIndex(idx)
+
+        main_window.view_composition_button.setChecked(True)
+        main_window._on_generate_clicked()
+        _wait_until(lambda: main_window._state is not AppState.GENERATING, qapp)
+        assert main_window._current_backlight_result is not None
+
+        idx = main_window.display_mode_combo.findData(DisplayMode.BACKLIGHT_INSERT_PREVIEW)
+        main_window.display_mode_combo.setCurrentIndex(idx)
+
+        viewer = main_window.scene_viewer
+        assert viewer._mesh_actor is not None  # le corps blanc
+        assert len(viewer._material_actors) == 1  # l'insert, jamais le support sacrificiel
+
+        insert_actor = viewer._material_actors[0]
+        actor_color = insert_actor.GetProperty().GetColor()
+        assert actor_color == pytest.approx(rose_zone.material.color, abs=1e-2)
+    finally:
+        main_window.plotter.close()
+
+
+def test_backlight_couleur_mode_falls_back_gracefully_without_backlight_zone(qapp, tmp_path, monkeypatch):
+    """Sans zone Backlight Insert active, le mode "Backlight couleur" ne
+    doit jamais planter ni rester dans un etat casse/vide -- il retombe
+    proprement sur l'apercu retro-eclaire normal (corps blanc seul)."""
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.warning", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.critical", lambda *a, **k: None)
+
+    main_window = MainWindow(plotter=pv.Plotter(off_screen=True))
+    try:
+        image_path = tmp_path / "photo.png"
+        _make_woman_with_rose_photo(image_path)
+        main_window._load_image(str(image_path))
+        main_window.resolution_spin.setValue(1.0)
+
+        main_window.view_composition_button.setChecked(True)
+        main_window._on_generate_clicked()
+        _wait_until(lambda: main_window._state is not AppState.GENERATING, qapp)
+        assert main_window._current_backlight_result is None  # aucune zone Backlight Insert
+
+        idx = main_window.display_mode_combo.findData(DisplayMode.BACKLIGHT_INSERT_PREVIEW)
+        main_window.display_mode_combo.setCurrentIndex(idx)  # ne doit pas lever d'exception
+
+        viewer = main_window.scene_viewer
+        assert viewer._mesh_actor is not None
+        assert viewer._material_actors == []
     finally:
         main_window.plotter.close()

@@ -48,11 +48,18 @@ def test_show_mesh_replaces_previous_actor_without_leaking(offscreen_plotter):
 
 
 @pytest.mark.parametrize(
-    "mode", [m for m in DisplayMode if m is not DisplayMode.MATERIALS]
+    "mode",
+    [
+        m
+        for m in DisplayMode
+        if m not in (DisplayMode.MATERIALS, DisplayMode.BACKLIGHT_INSERT_PREVIEW)
+    ],
 )
 def test_all_display_modes_render_without_error(offscreen_plotter, mode):
-    """MATERIALS ne passe pas par `show_mesh` -- voir show_material_meshes
-    plus bas, teste separement (affiche plusieurs corps, pas un seul)."""
+    """MATERIALS et BACKLIGHT_INSERT_PREVIEW ne passent pas par `show_mesh`
+    (ils affichent plusieurs corps, pas un seul) -- voir
+    show_material_meshes/show_backlight_insert_preview, testes separement
+    plus bas."""
     viewer = SceneViewer(offscreen_plotter)
     viewer.show_mesh(_sample_mesh(), display_mode=mode)
     offscreen_plotter.render()
@@ -168,6 +175,77 @@ def test_show_material_meshes_then_show_mesh_clears_material_actors(offscreen_pl
     viewer = SceneViewer(offscreen_plotter)
     viewer.show_material_meshes({"Blanc": (_sample_mesh(), (1.0, 1.0, 1.0))})
     assert len(viewer._material_actors) == 1
+
+    viewer.show_mesh(_sample_mesh())
+
+    assert viewer._material_actors == []
+    assert viewer._mesh_actor is not None
+
+
+def test_show_backlight_insert_preview_adds_white_and_insert_actors(offscreen_plotter):
+    """Corps blanc (retro-eclaire) + insert(s) doivent tous les deux etre
+    des acteurs visibles simultanement dans la scene."""
+    viewer = SceneViewer(offscreen_plotter)
+    white_mesh = _sample_mesh()
+    insert_mesh = _sample_mesh()
+
+    viewer.show_backlight_insert_preview(
+        white_mesh, {"Rose": (insert_mesh, (0.85, 0.08, 0.28))}
+    )
+    offscreen_plotter.render()
+
+    assert viewer._mesh_actor is not None  # le corps blanc
+    assert len(viewer._material_actors) == 1  # l'insert
+
+
+def test_show_backlight_insert_preview_uses_the_real_insert_color(offscreen_plotter):
+    """La couleur passee pour l'insert doit etre reellement appliquee a son
+    acteur (pas une couleur generique/par defaut)."""
+    viewer = SceneViewer(offscreen_plotter)
+    insert_color = (0.1, 0.9, 0.2)
+
+    viewer.show_backlight_insert_preview(
+        _sample_mesh(), {"Vert": (_sample_mesh(), insert_color)}
+    )
+    offscreen_plotter.render()
+
+    actor = viewer._material_actors[0]
+    prop = actor.GetProperty()
+    # VTK quantifie la couleur sur 8 bits (1/255 ~= 0.0039) -- tolerance
+    # legerement plus large que l'arrondi flottant pur.
+    assert prop.GetColor() == pytest.approx(insert_color, abs=1e-2)
+
+
+def test_show_backlight_insert_preview_never_shows_breakaway_supports(offscreen_plotter):
+    """Seuls le corps blanc et les inserts sont passes a cette methode --
+    verifie qu'avec un seul insert fourni (aucun support), un seul acteur
+    materiau existe (pas de troisieme corps ajoute implicitement)."""
+    viewer = SceneViewer(offscreen_plotter)
+
+    viewer.show_backlight_insert_preview(
+        _sample_mesh(), {"Rose": (_sample_mesh(), (0.85, 0.08, 0.28))}
+    )
+
+    assert len(viewer._material_actors) == 1
+
+
+def test_show_backlight_insert_preview_with_no_inserts_still_shows_white_body(offscreen_plotter):
+    """Dict d'inserts vide (ex. scene sans zone Backlight Insert active) --
+    ne doit jamais lever d'erreur, le corps blanc reste affiche seul."""
+    viewer = SceneViewer(offscreen_plotter)
+
+    viewer.show_backlight_insert_preview(_sample_mesh(), {})
+    offscreen_plotter.render()
+
+    assert viewer._mesh_actor is not None
+    assert viewer._material_actors == []
+
+
+def test_show_backlight_insert_preview_then_show_mesh_clears_all_actors(offscreen_plotter):
+    viewer = SceneViewer(offscreen_plotter)
+    viewer.show_backlight_insert_preview(
+        _sample_mesh(), {"Rose": (_sample_mesh(), (0.85, 0.08, 0.28))}
+    )
 
     viewer.show_mesh(_sample_mesh())
 

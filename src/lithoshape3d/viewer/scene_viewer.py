@@ -57,6 +57,12 @@ class DisplayMode(Enum):
     """Ce mode ne passe pas par `show_mesh` (il montre plusieurs corps, pas
     un seul) -- voir `SceneViewer.show_material_meshes`. Reste dans cette
     enum pour partager le meme combo d'affichage cote UI."""
+    BACKLIGHT_INSERT_PREVIEW = "backlight_insert_preview"
+    """Combine le corps blanc retro-eclaire (meme mappage epaisseur ->
+    luminosite que BACKLIGHT_PREVIEW) ET les inserts Backlight Insert dans
+    leur vraie couleur materiau, pour estimer le rendu final avant
+    impression -- voir `SceneViewer.show_backlight_insert_preview`. Comme
+    MATERIALS, ne passe pas par `show_mesh` (plusieurs corps)."""
 
 
 def _add_mesh_kwargs(display_mode: DisplayMode) -> dict:
@@ -214,6 +220,71 @@ class SceneViewer:
             specular=0.08,
             specular_power=8,
         )
+
+    def show_backlight_insert_preview(
+        self,
+        white_mesh: trimesh.Trimesh,
+        insert_meshes: dict[str, tuple[trimesh.Trimesh, tuple[float, float, float]]],
+        panel_z_max: float | None = None,
+    ) -> None:
+        """Combine dans une seule scene le corps blanc retro-eclaire (meme
+        mappage epaisseur -> luminosite que `_show_backlight_preview`) et
+        les inserts Backlight Insert dans leur VRAIE couleur materiau, pour
+        estimer le rendu final avant impression -- pas une simulation
+        physique de transmission lumineuse, meme approximation visuelle que
+        `BACKLIGHT_PREVIEW`.
+
+        Les supports sacrificiels (`breakaway_support_meshes`) ne sont
+        volontairement JAMAIS passes ici : ce ne sont pas des elements du
+        rendu final, seulement une aide a l'impression retiree avant
+        assemblage (cf. `main_window._render_backlight_insert_preview`, qui
+        filtre en amont)."""
+        self._clear_actors()
+        self.plotter.set_background(BACKLIGHT_BACKGROUND_COLOR)
+        self.plotter.remove_all_lights()
+        self.plotter.enable_lightkit()
+
+        white_polydata = mesh_to_polydata(white_mesh)
+        white_polydata["brightness"] = _backlight_brightness_from_z(white_polydata.points, panel_z_max)
+        cmap = LinearSegmentedColormap.from_list(
+            "litho_backlight", [BACKLIGHT_DARK_COLOR, BACKLIGHT_BRIGHT_COLOR]
+        )
+        self._mesh_actor = self.plotter.add_mesh(
+            white_polydata,
+            style="surface",
+            show_edges=False,
+            scalars="brightness",
+            cmap=cmap,
+            clim=(0.0, 1.0),
+            show_scalar_bar=False,
+            opacity=1.0,
+            smooth_shading=True,
+            ambient=0.35,
+            diffuse=0.75,
+            specular=0.08,
+            specular_power=8,
+        )
+
+        # Ambient plus eleve que le corps blanc (0.55 vs 0.35) : la couleur
+        # materiau reelle de l'insert doit rester lisible sur le fond tres
+        # sombre du mode retro-eclaire, pas s'y fondre comme une simple
+        # zone d'ombre.
+        for mesh, color in insert_meshes.values():
+            polydata = mesh_to_polydata(mesh)
+            actor = self.plotter.add_mesh(
+                polydata,
+                style="surface",
+                show_edges=False,
+                color=color,
+                smooth_shading=True,
+                ambient=0.55,
+                diffuse=0.6,
+                specular=0.25,
+                specular_power=20,
+            )
+            self._material_actors.append(actor)
+
+        self.plotter.reset_camera()
 
     def set_display_mode(self, mesh: trimesh.Trimesh, display_mode: DisplayMode) -> None:
         self.show_mesh(mesh, display_mode=display_mode)

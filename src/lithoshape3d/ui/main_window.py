@@ -706,6 +706,7 @@ class MainWindow(QMainWindow):
         self.display_mode_combo.addItem("Surface + aretes", DisplayMode.SURFACE_WITH_EDGES)
         self.display_mode_combo.addItem("Apercu retro-eclaire", DisplayMode.BACKLIGHT_PREVIEW)
         self.display_mode_combo.addItem("Materiaux", DisplayMode.MATERIALS)
+        self.display_mode_combo.addItem("Backlight couleur", DisplayMode.BACKLIGHT_INSERT_PREVIEW)
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.display_mode_combo)
 
@@ -1667,10 +1668,38 @@ class MainWindow(QMainWindow):
         mode = self.display_mode_combo.currentData()
         if mode is DisplayMode.MATERIALS:
             self.scene_viewer.show_material_meshes(self._materials_for_display())
+        elif mode is DisplayMode.BACKLIGHT_INSERT_PREVIEW:
+            self._render_backlight_insert_preview()
         else:
             self.scene_viewer.show_mesh(
                 self._current_mesh, display_mode=mode, panel_z_max=self._current_panel_z_max
             )
+
+    def _render_backlight_insert_preview(self) -> None:
+        """Mode "Backlight couleur" : corps blanc retro-eclaire + inserts
+        dans leur vraie couleur materiau -- voir
+        `SceneViewer.show_backlight_insert_preview`. Sans zone Backlight
+        Insert active, degrade proprement vers l'apercu retro-eclaire normal
+        (pas d'etat casse/vide dans le viewer)."""
+        result = self._current_backlight_result
+        if result is None:
+            self.scene_viewer.show_mesh(
+                self._current_mesh,
+                display_mode=DisplayMode.BACKLIGHT_PREVIEW,
+                panel_z_max=self._current_panel_z_max,
+            )
+            return
+
+        color_by_material: dict[str, tuple[float, float, float]] = {}
+        for zone in self._project.scene.zones:
+            color_by_material.setdefault(zone.material.name, zone.material.color)
+        insert_meshes = {
+            name: (mesh, color_by_material.get(name, (0.85, 0.08, 0.28)))
+            for name, mesh in result.insert_meshes.items()
+        }
+        self.scene_viewer.show_backlight_insert_preview(
+            result.white_mesh, insert_meshes, panel_z_max=self._current_panel_z_max
+        )
 
     def _materials_for_display(self) -> dict[str, tuple[object, tuple[float, float, float]]]:
         if self._current_backlight_result is not None:
