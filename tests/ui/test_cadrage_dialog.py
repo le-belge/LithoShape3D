@@ -131,3 +131,50 @@ def test_rotation_spin_updates_transform(dialog):
     dialog.rotation_spin.setValue(30.0)
 
     assert dialog.transform.rotation_deg == 30.0
+
+
+def test_zoom_percent_label_starts_at_100_percent(dialog):
+    """Retour terrain : la molette seule est trop brutale -- boutons +/- et
+    pourcentage affiche donnent un controle plus fin/previsible."""
+    assert dialog.zoom_percent_label.text() == "100 %"
+
+
+def test_zoom_in_button_increases_scale_and_label(dialog):
+    dialog.zoom_in_button.click()
+
+    assert dialog.transform.scale == pytest.approx(1.05)
+    assert dialog.zoom_percent_label.text() == "105 %"
+
+
+def test_zoom_out_button_decreases_scale_and_label(dialog):
+    dialog.zoom_out_button.click()
+
+    assert dialog.transform.scale < 1.0
+    assert dialog.zoom_percent_label.text() == f"{round(dialog.transform.scale * 100)} %"
+
+
+def test_zoom_buttons_are_gentler_than_old_wheel_step(dialog):
+    """Le pas des boutons (5%) doit rester nettement plus doux que l'ancien
+    pas molette (qui etait de 10% par cran, juge "trop brutal")."""
+    dialog.zoom_in_button.click()
+
+    assert dialog.transform.scale < 1.10
+
+
+def test_wheel_zoom_step_is_gentler_than_before(dialog):
+    """Regression : le pas molette doit rester fin (<=5% par cran), pas
+    l'ancien facteur 1.1 (10%) juge trop brutal."""
+    wheel_in = QWheelEvent(
+        QPointF(200, 200), QPointF(200, 200), QPoint(0, 0), QPoint(0, 120),
+        QtNS.MouseButton.NoButton, QtNS.KeyboardModifier.NoModifier,
+        QtNS.ScrollPhase.NoScrollPhase, False,
+    )
+    dialog.preview.wheelEvent(wheel_in)
+
+    assert dialog.transform.scale < 1.05
+
+
+def test_zoom_percent_label_updates_after_fill_button(dialog):
+    dialog._on_fill_clicked()
+
+    assert dialog.zoom_percent_label.text() == f"{round(dialog.transform.scale * 100)} %"

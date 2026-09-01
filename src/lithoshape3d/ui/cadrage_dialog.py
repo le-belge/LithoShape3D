@@ -33,6 +33,11 @@ from lithoshape3d.core.scene.models import ImageTransform
 
 _PREVIEW_MAX_SIDE = 420
 _OUTSIDE_DARKEN_FACTOR = 0.25
+_ZOOM_BUTTON_STEP_PERCENT = 5
+"""Pas (en %) applique par les boutons +/- -- volontairement plus large
+que le pas molette (retour terrain : la molette seule est trop brutale
+pour un ajustement fin ; les boutons offrent l'inverse, un pas net et
+previsible sans avoir a compter les crans de molette)."""
 
 
 class _CadragePreviewWidget(QWidget):
@@ -120,7 +125,18 @@ class _CadragePreviewWidget(QWidget):
         self._dragging = False
 
     def wheelEvent(self, event) -> None:
-        factor = 1.1 if event.angleDelta().y() > 0 else 1.0 / 1.1
+        # Pas fin (retour terrain : la molette etait "trop brutale") --
+        # nettement plus doux que l'ancien facteur 1.1 par cran, tout en
+        # restant perceptible sur un simple mouvement de molette.
+        factor = 1.03 if event.angleDelta().y() > 0 else 1.0 / 1.03
+        new_scale = max(0.2, min(8.0, self.transform.scale * factor))
+        self.transform = replace(self.transform, scale=new_scale, fit_mode="free")
+        self._refresh()
+        self.transform_changed.emit(self.transform)
+
+    def apply_zoom_factor(self, factor: float) -> None:
+        """Zoom pas-a-pas (boutons +/-), meme logique que la molette mais
+        declenchable sans souris/trackpad pour un controle plus precis."""
         new_scale = max(0.2, min(8.0, self.transform.scale * factor))
         self.transform = replace(self.transform, scale=new_scale, fit_mode="free")
         self._refresh()
@@ -149,7 +165,7 @@ class CadrageDialog(QDialog):
 
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "Glisser : deplacer la photo -- molette : zoomer. "
+            "Glisser : deplacer la photo -- molette ou boutons +/- : zoomer. "
             "La forme reste fixe, l'exterieur est assombri."
         )
         hint.setWordWrap(True)
@@ -175,6 +191,27 @@ class CadrageDialog(QDialog):
         buttons_row.addWidget(self.reset_button)
         layout.addLayout(buttons_row)
 
+        # Zoom pas-a-pas + pourcentage affiche (retour terrain : la molette
+        # seule est trop brutale pour un cadrage precis) -- meme transform
+        # que la molette (`apply_zoom_factor`), juste un declencheur plus fin
+        # et sans souris/trackpad.
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("Zoom"))
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setFixedWidth(32)
+        self.zoom_out_button.clicked.connect(self._on_zoom_out_clicked)
+        zoom_row.addWidget(self.zoom_out_button)
+        self.zoom_percent_label = QLabel()
+        self.zoom_percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.zoom_percent_label.setFixedWidth(56)
+        zoom_row.addWidget(self.zoom_percent_label)
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setFixedWidth(32)
+        self.zoom_in_button.clicked.connect(self._on_zoom_in_clicked)
+        zoom_row.addWidget(self.zoom_in_button)
+        zoom_row.addStretch(1)
+        layout.addLayout(zoom_row)
+
         form = QFormLayout()
         self.rotation_spin = QDoubleSpinBox()
         self.rotation_spin.setRange(-180.0, 180.0)
@@ -190,12 +227,23 @@ class CadrageDialog(QDialog):
         layout.addWidget(button_box)
 
         self.transform = initial_transform
+        self._refresh_zoom_percent_label()
+
+    def _refresh_zoom_percent_label(self) -> None:
+        self.zoom_percent_label.setText(f"{round(self.transform.scale * 100)} %")
+
+    def _on_zoom_in_clicked(self) -> None:
+        self.preview.apply_zoom_factor(1.0 + _ZOOM_BUTTON_STEP_PERCENT / 100.0)
+
+    def _on_zoom_out_clicked(self) -> None:
+        self.preview.apply_zoom_factor(1.0 / (1.0 + _ZOOM_BUTTON_STEP_PERCENT / 100.0))
 
     def _on_preview_transform_changed(self, transform: ImageTransform) -> None:
         self.transform = transform
         self.rotation_spin.blockSignals(True)
         self.rotation_spin.setValue(transform.rotation_deg)
         self.rotation_spin.blockSignals(False)
+        self._refresh_zoom_percent_label()
 
     def _on_rotation_changed(self, value: float) -> None:
         self.transform = replace(self.transform, rotation_deg=value, fit_mode="free")
@@ -224,3 +272,4 @@ class CadrageDialog(QDialog):
         self.rotation_spin.blockSignals(True)
         self.rotation_spin.setValue(self.transform.rotation_deg)
         self.rotation_spin.blockSignals(False)
+        self._refresh_zoom_percent_label()
