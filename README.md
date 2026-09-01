@@ -283,6 +283,29 @@ affiché.
 python scripts/benchmark_composition.py
 ```
 
+## Backlight couleur (aperçu 3D)
+
+Mode d'affichage dédié (`Affichage > Backlight couleur`) pour estimer le
+rendu final d'une pièce Backlight Insert avant impression : combine dans
+la même scène le corps blanc rétro-éclairé (même simulation de luminosité
+par épaisseur que l'aperçu rétro-éclairé classique) et le ou les inserts
+dans leur **vraie couleur matériau**, en vue depuis l'arrière (côté source
+de lumière) — les supports sacrificiels ne sont jamais affichés dans ce
+mode. Sans zone Backlight Insert active, l'app retombe proprement sur
+l'aperçu rétro-éclairé normal.
+
+![Aperçu Backlight couleur](docs/img/backlight_couleur_preview.png)
+
+## Identité visuelle et packaging
+
+Le logo (`src/lithoshape3d/ui/assets/lithoshape3d_mark.svg`) est chargé via
+`src/lithoshape3d/ui/branding.py`, utilisé comme icône de fenêtre et comme
+logo dans le panneau gauche de l'application. Les icônes natives macOS/
+Windows (`packaging/icons/lithoshape3d.icns` / `.ico`) sont régénérées
+depuis ce même SVG par `python packaging/generate_icons.py` (nécessite
+l'extra `pip install -e ".[packaging]"`) et référencées directement dans
+`packaging/lithoshape3d.spec` / `packaging/lithoshape3d_windows.spec`.
+
 ## État actuel
 
 Cette section historique s'arrêtait à la Phase 2C ; depuis, le projet a
