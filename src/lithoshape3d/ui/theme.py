@@ -92,6 +92,20 @@ QLabel#brandName {{
     font-weight: 700;
 }}
 
+QLabel#aboutName {{
+    color: {BRAND_INK};
+    font-size: 18px;
+    font-weight: 700;
+}}
+QLabel#aboutVersion {{
+    color: {TEXT_MUTED};
+    font-size: 12px;
+}}
+QLabel#aboutCopyright {{
+    color: {TEXT_MUTED};
+    font-size: 11px;
+}}
+
 QLabel#staleBanner {{
     color: {BACKGROUND};
     background-color: {WARNING};

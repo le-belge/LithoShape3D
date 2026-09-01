@@ -2052,13 +2052,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _show_about(self) -> None:
-        from lithoshape3d import __version__
+        from lithoshape3d.ui.about_dialog import AboutDialog
 
-        ai_status = "disponible" if self._segmentation_backend is not None else "indisponible"
-        QMessageBox.information(
-            self,
-            "A propos de LithoShape3D",
-            f"LithoShape3D {__version__}\n"
-            "Image -> zones -> LithoFusion -> STL.\n\n"
-            f"Selection intelligente (SAM2) : {ai_status}.",
-        )
+        dialog = AboutDialog(self)
+        dialog.exec()
