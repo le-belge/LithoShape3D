@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import trimesh
 from PIL import Image
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter, QPixmap
@@ -1725,6 +1726,40 @@ class MainWindow(QMainWindow):
             return f"{project_name}_{self._slugify(zone.name)}.stl"
         return f"{project_name}.stl"
 
+    _VERTICAL_PRINT_ROTATION = trimesh.transformations.rotation_matrix(
+        np.radians(90.0), [1.0, 0.0, 0.0], point=[0.0, 0.0, 0.0]
+    )
+    """A l'export uniquement (jamais applique a l'apercu 3D en edition) :
+    le modele est construit avec Y=hauteur/Z=epaisseur (convention de
+    travail de tout le moteur, cf. mesh_builder.py), mais une lithophanie
+    s'imprime DEBOUT, le bord bas au contact du plateau -- confirme a
+    plusieurs reprises par les tests physiques (voir CURRENT_STATE.md).
+    Cette rotation de 90 deg autour de X amene l'ancien axe hauteur (Y)
+    sur le nouvel axe vertical d'impression (Z), pour livrer un fichier
+    deja pret a trancher sans reorientation manuelle dans le slicer."""
+
+    @classmethod
+    def _oriented_for_vertical_print(
+        cls, material_meshes: dict[str, "trimesh.Trimesh"]
+    ) -> dict[str, "trimesh.Trimesh"]:
+        """Copie et reoriente tous les corps donnes pour une impression
+        debout (voir `_VERTICAL_PRINT_ROTATION`), puis les retranslate en
+        bloc (translation UNIQUE partagee par tous les corps, pas une par
+        corps -- sinon leur alignement relatif serait detruit) pour que
+        le point le plus bas de l'ensemble touche Z=0 (plateau) avec des
+        coordonnees non negatives, comme attendu par un slicer."""
+        if not material_meshes:
+            return {}
+        rotated = {name: mesh.copy() for name, mesh in material_meshes.items()}
+        for mesh in rotated.values():
+            mesh.apply_transform(cls._VERTICAL_PRINT_ROTATION)
+        combined_min = np.min(
+            [mesh.bounds[0] for mesh in rotated.values()], axis=0
+        )
+        for mesh in rotated.values():
+            mesh.apply_translation(-combined_min)
+        return rotated
+
     def _on_export_clicked(self) -> None:
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
@@ -1743,8 +1778,9 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        oriented = self._oriented_for_vertical_print({"_": self._current_mesh})["_"]
         try:
-            export_stl(self._current_mesh, path)
+            export_stl(oriented, path)
         except OSError as exc:
             logger.exception("Echec de l'export STL")
             QMessageBox.critical(self, "LithoShape3D", f"Echec de l'export :\n{exc}")
@@ -1761,7 +1797,9 @@ class MainWindow(QMainWindow):
         stabilisateurs lateraux (toujours des corps SEPARES, jamais
         fusionnes au panneau) -- voir `_on_export_clicked`."""
         materials = self._materials_for_display()
-        material_meshes = {name: mesh for name, (mesh, _color) in materials.items()}
+        material_meshes = self._oriented_for_vertical_print(
+            {name: mesh for name, (mesh, _color) in materials.items()}
+        )
         base_name = self._slugify(self._project.name)
         directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL (un fichier par corps)")
         if not directory:
@@ -1787,7 +1825,9 @@ class MainWindow(QMainWindow):
             return
 
         materials = self._materials_for_display()
-        material_meshes = {name: mesh for name, (mesh, _color) in materials.items()}
+        material_meshes = self._oriented_for_vertical_print(
+            {name: mesh for name, (mesh, _color) in materials.items()}
+        )
         if len(material_meshes) <= 1:
             QMessageBox.information(
                 self, "LithoShape3D", "Un seul materiau utilise : l'export STL standard suffit."

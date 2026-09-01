@@ -155,6 +155,44 @@ def test_export_routes_through_multi_file_when_stabilizers_enabled(main_window, 
     assert not (tmp_path / "ne-devrait-pas-etre-utilise.stl").exists()
 
 
+def test_exported_stl_is_oriented_for_vertical_printing(main_window, tmp_path, monkeypatch):
+    """Le modele travaille en Y=hauteur/Z=epaisseur (convention interne),
+    mais s'imprime reellement DEBOUT -- l'export doit livrer un fichier
+    deja tourne pour ca (l'ancienne hauteur devient l'axe vertical Z),
+    sans que l'utilisateur ait a le reorienter dans le slicer."""
+    _load(main_window, tmp_path, width=60, height=45)
+    main_window.resolution_spin.setValue(3.0)
+
+    panel_mesh = compose_scene_mesh(main_window._build_zone_sources())
+    original_height = float(panel_mesh.bounds[1][1] - panel_mesh.bounds[0][1])
+    original_thickness = float(panel_mesh.bounds[1][2] - panel_mesh.bounds[0][2])
+
+    main_window._current_mesh = panel_mesh
+    main_window._set_state(AppState.MESH_READY)
+
+    stl_path = tmp_path / "oriented.stl"
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(stl_path), ""),
+    )
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.critical", lambda *a, **k: None)
+
+    main_window._on_export_clicked()
+
+    import trimesh
+
+    reloaded = trimesh.load(stl_path)
+    # L'ancienne hauteur (Y) est maintenant portee par Z (axe vertical
+    # d'impression) ; l'ancienne epaisseur (Z) est maintenant sur Y.
+    assert float(reloaded.bounds[1][2] - reloaded.bounds[0][2]) == pytest.approx(original_height, abs=1e-3)
+    assert float(reloaded.bounds[1][1] - reloaded.bounds[0][1]) == pytest.approx(
+        original_thickness, abs=1e-3
+    )
+    # Coordonnees non negatives, pret pour un slicer (plateau a Z=0).
+    assert reloaded.bounds[0][2] >= -1e-6
+
+
 def test_load_support_into_panel_reflects_project_state(main_window):
     from lithoshape3d.core.scene.models import PrintSupport
 
