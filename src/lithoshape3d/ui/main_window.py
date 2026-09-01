@@ -448,6 +448,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(relief_group)
 
         composition_group = QGroupBox("Composition")
+        self.composition_group = composition_group  # ancre de scroll : onglet "Geometrie / Backlight"
         composition_form = QFormLayout(composition_group)
         composition_form.setSpacing(8)
         self.composition_mode_combo = QComboBox()
@@ -882,18 +883,51 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(6)
 
-        self._workflow_step_labels: list[QLabel] = []
+        # Onglets reellement cliquables (retour terrain : un simple
+        # indicateur statique pretait a confusion, pris pour des onglets
+        # inertes) -- QPushButton plat plutot que QLabel, chacun declenche
+        # une action utile et directe vers l'etape correspondante (cf.
+        # `_on_workflow_step_clicked`).
+        self._workflow_step_buttons: list[QPushButton] = []
         for index, name in enumerate(self._WORKFLOW_STEPS):
             if index > 0:
                 arrow = QLabel("›")  # "›"
                 arrow.setObjectName("workflowArrow")
                 layout.addWidget(arrow)
-            label = QLabel(name)
-            label.setObjectName("workflowStep")
-            layout.addWidget(label)
-            self._workflow_step_labels.append(label)
+            button = QPushButton(name)
+            button.setObjectName("workflowStep")
+            button.setFlat(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, n=name: self._on_workflow_step_clicked(n))
+            layout.addWidget(button)
+            self._workflow_step_buttons.append(button)
         layout.addStretch(1)
         return bar
+
+    def _on_workflow_step_clicked(self, step_name: str) -> None:
+        """Chaque onglet declenche une action directe vers son etape,
+        plutot qu'une simple mise en surbrillance passive (retour terrain :
+        les utilisateurs s'attendent a ce qu'un onglet fasse quelque
+        chose)."""
+        if step_name == "Image":
+            self._choose_image()
+        elif step_name == "Zones":
+            self.zones_list.setFocus()
+        elif step_name == "Geometrie / Backlight":
+            self.params_scroll_area.ensureWidgetVisible(self.composition_group)
+        elif step_name == "Apercu":
+            if self._state is AppState.MESH_READY:
+                self.scene_viewer.plotter.reset_camera()
+                self.scene_viewer.plotter.render()
+            elif self.generate_button.isEnabled():
+                self._on_generate_clicked()
+        elif step_name == "Export":
+            if self._state is AppState.MESH_READY:
+                self._on_export_clicked()
+            else:
+                self.statusBar().showMessage(
+                    "Generez d'abord un apercu (etape 'Apercu') avant d'exporter.", 5000
+                )
 
     def _update_workflow_indicator(self, state: AppState) -> None:
         # Deux etapes (Zones, Geometrie/Backlight) partagent les memes
@@ -908,11 +942,11 @@ class MainWindow(QMainWindow):
             "Apercu": state in (AppState.GENERATING, AppState.MESH_READY),
             "Export": state is AppState.MESH_READY,
         }
-        for label in self._workflow_step_labels:
-            is_active = active_by_step.get(label.text(), False)
-            label.setProperty("active", is_active)
-            label.style().unpolish(label)
-            label.style().polish(label)
+        for button in self._workflow_step_buttons:
+            is_active = active_by_step.get(button.text(), False)
+            button.setProperty("active", is_active)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     def _set_state(self, state: AppState) -> None:
         self._state = state

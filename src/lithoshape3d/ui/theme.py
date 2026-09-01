@@ -105,13 +105,20 @@ QWidget#workflowIndicator {{
     background-color: {SURFACE_ALT};
     border-bottom: 1px solid {BORDER};
 }}
-QLabel#workflowStep {{
+QPushButton#workflowStep {{
     color: {TEXT_MUTED};
     font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.02em;
+    background-color: transparent;
+    border: none;
+    padding: 2px 3px;
 }}
-QLabel#workflowStep[active="true"] {{
+QPushButton#workflowStep:hover {{
+    color: {ACCENT_HOVER};
+    text-decoration: underline;
+}}
+QPushButton#workflowStep[active="true"] {{
     color: {ACCENT};
 }}
 QLabel#workflowArrow {{

@@ -214,9 +214,9 @@ def test_quality_only_presets_do_not_touch_width(main_window, tmp_path):
 
 def _active_workflow_steps(main_window) -> list[str]:
     return [
-        label.text()
-        for label in main_window._workflow_step_labels
-        if label.property("active")
+        button.text()
+        for button in main_window._workflow_step_buttons
+        if button.property("active")
     ]
 
 
@@ -241,3 +241,67 @@ def test_workflow_indicator_highlights_apercu_and_export_once_mesh_ready(qapp, m
 
     assert main_window._state is AppState.MESH_READY
     assert set(_active_workflow_steps(main_window)) == {"Apercu", "Export"}
+
+
+def _workflow_button(main_window, name: str):
+    return next(b for b in main_window._workflow_step_buttons if b.text() == name)
+
+
+def test_workflow_tab_image_opens_the_image_chooser(main_window, monkeypatch):
+    """Onglet cliquable (retour terrain) : "Image" doit vraiment declencher
+    l'ouverture du selecteur de fichier, pas juste illustrer l'etape."""
+    called = {}
+    monkeypatch.setattr(main_window, "_choose_image", lambda: called.setdefault("done", True))
+
+    _workflow_button(main_window, "Image").click()
+
+    assert called.get("done") is True
+
+
+def test_workflow_tab_geometrie_scrolls_params_panel_to_composition(main_window, tmp_path, monkeypatch):
+    _load(main_window, tmp_path)
+    called = {}
+    monkeypatch.setattr(
+        main_window.params_scroll_area,
+        "ensureWidgetVisible",
+        lambda widget: called.setdefault("widget", widget),
+    )
+
+    _workflow_button(main_window, "Geometrie / Backlight").click()
+
+    assert called.get("widget") is main_window.composition_group
+
+
+def test_workflow_tab_apercu_triggers_generation_when_not_ready(main_window, tmp_path, monkeypatch):
+    _load(main_window, tmp_path)
+    called = {}
+    monkeypatch.setattr(main_window, "_on_generate_clicked", lambda: called.setdefault("done", True))
+
+    _workflow_button(main_window, "Apercu").click()
+
+    assert called.get("done") is True
+
+
+def test_workflow_tab_export_triggers_export_when_mesh_ready(qapp, main_window, tmp_path, monkeypatch):
+    _load(main_window, tmp_path)
+    main_window._on_generate_clicked()
+    deadline = time.monotonic() + 10
+    while main_window._state is AppState.GENERATING and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert main_window._state is AppState.MESH_READY
+
+    called = {}
+    monkeypatch.setattr(main_window, "_on_export_clicked", lambda: called.setdefault("done", True))
+
+    _workflow_button(main_window, "Export").click()
+
+    assert called.get("done") is True
+
+
+def test_workflow_tab_export_shows_status_message_when_not_ready(main_window):
+    assert main_window._state is AppState.NO_IMAGE
+
+    _workflow_button(main_window, "Export").click()
+
+    assert "Generez d'abord" in main_window.statusBar().currentMessage()
