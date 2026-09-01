@@ -55,6 +55,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="LithoShape3D",
+    icon="icons/lithoshape3d.ico",
     debug=False,
     strip=False,
     upx=False,

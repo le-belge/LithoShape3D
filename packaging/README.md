@@ -9,6 +9,9 @@ pip install pyinstaller
 ./packaging/build_macos.sh
 ```
 
+L'icone native est versionnee sous `packaging/icons/`. Apres une modification
+du logo SVG, la regenerer une seule fois avec `python packaging/generate_icons.py`.
+
 Produit `packaging/dist/LithoShape3D.app` (~940 Mo, non signe/notarise).
 Reconstruit et relance reellement verifies (process actif, fenetre ouverte
 via capture d'ecran, log applicatif ecrit dans
@@ -33,6 +36,9 @@ pyinstaller packaging\lithoshape3d_windows.spec --noconfirm
 
 Produit `packaging\dist\LithoShape3D\` (dossier distribuable, `LithoShape3D.exe`
 a la racine).
+
+L'executable utilise `packaging/icons/lithoshape3d.ico`, genere depuis le meme
+logo SVG que l'application macOS.
 
 Aucune machine Windows physique disponible dans ces sessions, mais
 `.github/workflows/windows-build.yml` construit et verifie REELLEMENT le

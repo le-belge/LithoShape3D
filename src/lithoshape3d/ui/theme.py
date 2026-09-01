@@ -14,8 +14,10 @@ SURFACE_ALT = "#e8e9ec"
 BORDER = "#c9cad0"
 TEXT = "#202124"
 TEXT_MUTED = "#5f6368"
-ACCENT = "#1a73a8"
-ACCENT_HOVER = "#2288c4"
+ACCENT = "#157C89"
+ACCENT_HOVER = "#0F92A1"
+BRAND_INK = "#15232C"
+BRAND_CORAL = "#E74B4B"
 WARNING = "#b5790f"
 DISABLED_TEXT = "#a1a3a8"
 
@@ -79,6 +81,15 @@ QLabel#previewLabel {{
     border-radius: 4px;
     background-color: {SURFACE};
     color: {TEXT_MUTED};
+}}
+
+QWidget#brandLockup {{
+    background-color: transparent;
+}}
+QLabel#brandName {{
+    color: {BRAND_INK};
+    font-size: 17px;
+    font-weight: 700;
 }}
 
 QLabel#staleBanner {{

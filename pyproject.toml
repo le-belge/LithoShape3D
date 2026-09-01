@@ -33,6 +33,11 @@ ai = [
 app = [
     "lithoshape3d[viewer,ui]",
 ]
+packaging = [
+    # Uniquement pour regenerer les icones natives (packaging/generate_icons.py)
+    # depuis le logo SVG -- jamais importe par l'application elle-meme.
+    "cairosvg>=2.7",
+]
 app-full = [
     "lithoshape3d[viewer,ui,ai]",
 ]

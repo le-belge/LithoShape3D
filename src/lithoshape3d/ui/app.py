@@ -10,6 +10,7 @@ from lithoshape3d.ui.logging_config import configure_logging
 def run_app() -> int:
     from PySide6.QtWidgets import QApplication
 
+    from lithoshape3d.ui.branding import application_icon
     from lithoshape3d.ui.main_window import MainWindow
     from lithoshape3d.ui.theme import apply_theme
 
@@ -17,6 +18,8 @@ def run_app() -> int:
     logger.info("Lancement de LithoShape3D")
 
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setWindowIcon(application_icon())
+    app.setApplicationDisplayName("LithoShape3D")
     apply_theme(app)
     window = MainWindow()
     window.show()

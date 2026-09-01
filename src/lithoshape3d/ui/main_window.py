@@ -89,6 +89,7 @@ from lithoshape3d.core.scene.models import (
 from lithoshape3d.core.scene.project_io import load_project_bundle, save_project_bundle
 from lithoshape3d.core.validation.printability import check_printability
 from lithoshape3d.ui.mask_editor_dialog import MaskEditorDialog
+from lithoshape3d.ui.branding import BRAND_NAME, application_icon
 from lithoshape3d.ui.overlay import render_overlay, zone_color
 from lithoshape3d.ui.state import AppState
 from lithoshape3d.ui.worker import BacklightCompositionWorker, CompositionWorker, GenerationWorker
@@ -235,7 +236,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         from lithoshape3d import __version__
 
-        self.setWindowTitle(f"LithoShape3D {__version__}")
+        self.setWindowTitle(f"{BRAND_NAME} {__version__}")
+        self.setWindowIcon(application_icon())
         self.resize(1300, 800)
 
         self._project: Project = Project()
@@ -340,6 +342,22 @@ class MainWindow(QMainWindow):
         panel.setMinimumWidth(220)
         layout = QVBoxLayout(panel)
         layout.setSpacing(8)
+
+        brand = QWidget()
+        brand.setObjectName("brandLockup")
+        brand_layout = QHBoxLayout(brand)
+        brand_layout.setContentsMargins(4, 2, 4, 6)
+        brand_layout.setSpacing(9)
+        mark = QLabel()
+        mark.setPixmap(application_icon().pixmap(36, 36))
+        mark.setFixedSize(36, 36)
+        mark.setScaledContents(True)
+        brand_layout.addWidget(mark)
+        brand_title = QLabel(BRAND_NAME)
+        brand_title.setObjectName("brandName")
+        brand_layout.addWidget(brand_title)
+        brand_layout.addStretch(1)
+        layout.addWidget(brand)
 
         self.open_button = QPushButton("Ouvrir image...")
         self.open_button.clicked.connect(self._choose_image)

@@ -73,7 +73,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="LithoShape3D.app",
-    icon=None,
+    icon="icons/lithoshape3d.icns",
     bundle_identifier="com.lithoshape3d.app",
     info_plist={
         "CFBundleShortVersionString": APP_VERSION,
