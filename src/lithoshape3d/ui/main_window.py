@@ -97,9 +97,13 @@ from lithoshape3d.viewer.scene_viewer import DisplayMode, SceneViewer
 logger = logging.getLogger("lithoshape3d.ui")
 
 PRESETS: dict[str, dict[str, float]] = {
-    "Standard": {"resolution": 0.3, "min_thickness_mm": 0.8, "max_thickness_mm": 3.0},
-    "Fine": {"resolution": 0.15, "min_thickness_mm": 0.6, "max_thickness_mm": 3.0},
-    "Draft": {"resolution": 0.6, "min_thickness_mm": 1.0, "max_thickness_mm": 3.0},
+    # Noms en francais, pas la resolution brute en mm/px (retour terrain :
+    # plus parlant qu'un chiffre pour choisir une qualite, l'ajustement fin
+    # restant toujours possible via le champ Resolution juste en dessous,
+    # qui revient sur "Personnalise" des qu'on le modifie a la main).
+    "Moyen (standard)": {"resolution": 0.3, "min_thickness_mm": 0.8, "max_thickness_mm": 3.0},
+    "Fin": {"resolution": 0.15, "min_thickness_mm": 0.6, "max_thickness_mm": 3.0},
+    "Brouillon": {"resolution": 0.6, "min_thickness_mm": 1.0, "max_thickness_mm": 3.0},
     # Boitier tiers "Cadre Lithophane CMYK Bambu" (hugo.workshop, MakerWorld
     # #1036463) -- epaisseur max 3.2mm = jeu exact de la fente du cadre pour
     # une litho mono. La largeur seule ne garantit pas 104mm de hauteur (la

@@ -201,12 +201,12 @@ def test_lithogift_bambu_mono_preset_sets_width_and_thickness_for_the_frame_slot
 
 
 def test_quality_only_presets_do_not_touch_width(main_window, tmp_path):
-    """Les presets qualite existants (Standard/Fine/Draft) n'ont pas de
+    """Les presets qualite existants (Moyen/Fin/Brouillon) n'ont pas de
     width_mm -- ne doivent jamais toucher la largeur deja choisie par
     l'utilisateur (comportement inchange, non-regression)."""
     _load(main_window, tmp_path)
     main_window.width_spin.setValue(77.0)
 
-    main_window._apply_preset("Standard")
+    main_window._apply_preset("Moyen (standard)")
 
     assert main_window.width_spin.value() == 77.0

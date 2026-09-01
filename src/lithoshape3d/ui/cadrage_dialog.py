@@ -197,19 +197,18 @@ class CadrageDialog(QDialog):
         # et sans souris/trackpad.
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("Zoom"))
-        # Taille FIXE carree (pas seulement largeur) + police plus grande :
-        # sans hauteur fixee, le layout etirait ces boutons verticalement et
-        # deformait le symbole +/- (retour terrain : "n'apparaissent pas
-        # correctement"). Le signe moins Unicode (U+2212, pas un simple
-        # trait d'union) rend aussi mieux centre verticalement dans la
-        # plupart des polices systeme.
-        zoom_button_font = self.font()
-        zoom_button_font.setPointSize(zoom_button_font.pointSize() + 4)
-        zoom_button_font.setBold(True)
-
-        self.zoom_out_button = QPushButton("−")
+        # Root cause du symbole deforme (retour terrain, 2 tentatives
+        # infructueuses avant celle-ci) : le theme applique globalement
+        # `padding: 6px 14px` a TOUS les QPushButton (cf. theme.py) -- avec
+        # une taille fixe 32x32, ce padding ne laisse presque plus de place
+        # pour le glyphe (32 - 2*14 = 4px), qui se retrouve tronque a un
+        # point/trait a peine visible. Un style scoped par objectName
+        # (padding quasi nul, police normale) contourne cette regle globale
+        # sans y toucher ailleurs.
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setObjectName("zoomStepButton")
         self.zoom_out_button.setFixedSize(32, 32)
-        self.zoom_out_button.setFont(zoom_button_font)
+        self.zoom_out_button.setStyleSheet("QPushButton#zoomStepButton { padding: 0px; }")
         self.zoom_out_button.clicked.connect(self._on_zoom_out_clicked)
         zoom_row.addWidget(self.zoom_out_button)
         self.zoom_percent_label = QLabel()
@@ -217,8 +216,9 @@ class CadrageDialog(QDialog):
         self.zoom_percent_label.setFixedWidth(56)
         zoom_row.addWidget(self.zoom_percent_label)
         self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setObjectName("zoomStepButton")
         self.zoom_in_button.setFixedSize(32, 32)
-        self.zoom_in_button.setFont(zoom_button_font)
+        self.zoom_in_button.setStyleSheet("QPushButton#zoomStepButton { padding: 0px; }")
         self.zoom_in_button.clicked.connect(self._on_zoom_in_clicked)
         zoom_row.addWidget(self.zoom_in_button)
         zoom_row.addStretch(1)
