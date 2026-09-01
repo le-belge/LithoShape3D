@@ -200,3 +200,48 @@ def test_backlight_insert_full_workflow_from_photo_to_reopened_project(qapp, tmp
             reopened.plotter.close()
     finally:
         main_window.plotter.close()
+
+
+def test_backlight_insert_single_zone_same_material_name_keeps_white_body_visible(qapp, tmp_path, monkeypatch):
+    """Retour terrain (bug reel) : quand une SEULE zone au total sert a la
+    fois de base ET de zone Backlight Insert, son nom de materiau est
+    utilise a la fois pour le corps blanc ET pour son propre insert --
+    une simple fusion de dicts (`**insert_meshes` apres `white_name:
+    white_mesh`) faisait alors DISPARAITRE silencieusement le corps blanc
+    de `_materials_for_display` (ecrase par l'entree insert de meme cle),
+    donnant l'impression que "seul l'insert" apparait dans le viewer."""
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.warning", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.critical", lambda *a, **k: None)
+
+    main_window = MainWindow(plotter=pv.Plotter(off_screen=True))
+    try:
+        image_path = tmp_path / "photo.png"
+        _make_woman_with_rose_photo(image_path)
+        main_window._load_image(str(image_path))
+        main_window.resolution_spin.setValue(1.0)
+
+        zone = main_window._active_zone()
+        zone.material.name = "Lithophanie"  # MEME nom pour la base ET l'insert
+        idx = main_window.color_strategy_combo.findData(ColorStrategy.BACKLIGHT_INSERT)
+        main_window.color_strategy_combo.setCurrentIndex(idx)
+        assert zone.color_strategy is ColorStrategy.BACKLIGHT_INSERT
+
+        main_window.view_composition_button.setChecked(True)
+        main_window._on_generate_clicked()
+        _wait_until(lambda: main_window._state is not AppState.GENERATING, qapp)
+        assert main_window._current_backlight_result is not None
+
+        materials = main_window._materials_for_display()
+        # le corps blanc doit rester present sous une cle distincte de
+        # l'insert, jamais silencieusement ecrase.
+        white_keys = [k for k in materials if k != "Lithophanie" and "corps blanc" in k]
+        assert white_keys, f"corps blanc introuvable, cles obtenues : {list(materials.keys())}"
+        assert "Lithophanie" in materials  # l'insert reste bien present aussi
+        white_mesh, _color = materials[white_keys[0]]
+        insert_mesh, _color2 = materials["Lithophanie"]
+        assert white_mesh is not insert_mesh
+        assert validate_mesh(white_mesh).is_valid
+        assert validate_mesh(insert_mesh).is_valid
+    finally:
+        main_window.plotter.close()

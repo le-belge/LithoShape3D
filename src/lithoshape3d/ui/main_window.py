@@ -1660,6 +1660,16 @@ class MainWindow(QMainWindow):
                 (z for z in self._project.scene.zones if z.composition_mode is CompositionMode.BASE), None
             )
             white_name = base_zone.material.name if base_zone is not None else "Blanc"
+            # Bug reel (retour terrain) : si la zone de base sert AUSSI de
+            # zone Backlight Insert (cas courant -- une seule zone au
+            # total), son nom de materiau est utilise a la fois pour le
+            # corps blanc ET pour son propre insert -- une simple fusion de
+            # dicts (`**insert_meshes` apres `white_name: white_mesh`) fait
+            # alors DISPARAITRE silencieusement le corps blanc, ecrase par
+            # l'entree insert de MEME cle. Desambiguise explicitement des
+            # qu'une collision est possible.
+            if white_name in self._current_backlight_result.insert_meshes:
+                white_name = f"{white_name} (corps blanc)"
             self._current_material_meshes = {
                 white_name: self._current_backlight_result.white_mesh,
                 **self._current_backlight_result.insert_meshes,
