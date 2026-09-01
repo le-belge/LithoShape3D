@@ -82,6 +82,75 @@ def test_support_fields_write_to_scene_support(main_window):
     assert support.overhang_right_mm == 6.0
 
 
+def test_side_stabilizers_checkbox_writes_to_scene_support(main_window):
+    assert main_window._project.scene.support.side_stabilizers is False
+    main_window.support_side_stabilizers_checkbox.setChecked(True)
+    assert main_window._project.scene.support.side_stabilizers is True
+
+
+def test_load_support_into_panel_reflects_side_stabilizers(main_window):
+    from lithoshape3d.core.scene.models import PrintSupport
+
+    main_window._project.scene.support = PrintSupport(side_stabilizers=True)
+    main_window._load_support_into_panel()
+
+    assert main_window.support_side_stabilizers_checkbox.isChecked()
+
+
+def test_materials_display_includes_two_detachable_side_stabilizers(main_window, tmp_path):
+    _load(main_window, tmp_path, width=60, height=45)
+    main_window.resolution_spin.setValue(3.0)
+    main_window.support_side_stabilizers_checkbox.setChecked(True)
+
+    panel_mesh = compose_scene_mesh(main_window._build_zone_sources())
+    main_window._current_mesh = panel_mesh
+    main_window._current_material_meshes = {"Blanc": panel_mesh}
+
+    materials = main_window._materials_for_display()
+    left_mesh, _color_l = materials["Stabilisateur gauche (detachable)"]
+    right_mesh, _color_r = materials["Stabilisateur droit (detachable)"]
+
+    for mesh in (left_mesh, right_mesh):
+        result = validate_mesh(mesh)
+        assert result.is_valid
+
+    # jamais fusionnes au panneau : aucun chevauchement de leurs boites
+    # englobantes en X avec le panneau (ils l'effleurent, ne le penetrent pas).
+    panel_x_min, panel_x_max = float(panel_mesh.bounds[0][0]), float(panel_mesh.bounds[1][0])
+    assert float(left_mesh.bounds[1][0]) <= panel_x_min + 1e-6
+    assert float(right_mesh.bounds[0][0]) >= panel_x_max - 1e-6
+
+
+def test_export_routes_through_multi_file_when_stabilizers_enabled(main_window, tmp_path, monkeypatch):
+    _load(main_window, tmp_path, width=60, height=45)
+    main_window.resolution_spin.setValue(3.0)
+    main_window.support_side_stabilizers_checkbox.setChecked(True)
+
+    panel_mesh = compose_scene_mesh(main_window._build_zone_sources())
+    main_window._current_mesh = panel_mesh
+    main_window._current_material_meshes = {"Blanc": panel_mesh}
+    main_window._set_state(AppState.MESH_READY)
+
+    stl_dir = tmp_path / "stl_export"
+    stl_dir.mkdir()
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getExistingDirectory",
+        lambda *a, **k: str(stl_dir),
+    )
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(tmp_path / "ne-devrait-pas-etre-utilise.stl"), ""),
+    )
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.critical", lambda *a, **k: None)
+
+    main_window._on_export_clicked()
+
+    written_stl = list(stl_dir.glob("*.stl"))
+    assert len(written_stl) == 3  # Blanc + stabilisateur gauche + droit
+    assert not (tmp_path / "ne-devrait-pas-etre-utilise.stl").exists()
+
+
 def test_load_support_into_panel_reflects_project_state(main_window):
     from lithoshape3d.core.scene.models import PrintSupport
 

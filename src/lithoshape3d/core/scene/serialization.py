@@ -78,6 +78,7 @@ def _support_to_dict(support: PrintSupport) -> dict[str, Any]:
         "overhang_right_mm": support.overhang_right_mm,
         "rib_count": support.rib_count,
         "rib_thickness_mm": support.rib_thickness_mm,
+        "side_stabilizers": support.side_stabilizers,
     }
 
 
@@ -90,6 +91,7 @@ def _support_from_dict(data: dict[str, Any]) -> PrintSupport:
         overhang_right_mm=data.get("overhang_right_mm", 5.0),
         rib_count=data.get("rib_count", 3),
         rib_thickness_mm=data.get("rib_thickness_mm", 2.0),
+        side_stabilizers=data.get("side_stabilizers", False),
     )
 
 

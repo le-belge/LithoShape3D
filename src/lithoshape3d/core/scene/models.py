@@ -174,6 +174,15 @@ class PrintSupport:
     rib_count: int = 3
     """Nombre de renforts/goussets -- utilise seulement si REINFORCED."""
     rib_thickness_mm: float = 2.0
+    side_stabilizers: bool = False
+    """Deux corps SEPARES (jamais fusionnes au panneau) qui effleurent les
+    bords gauche/droit sur toute la hauteur, avec des languettes de contact
+    ponctuelles -- aide a l'impression verticale d'une lithophanie fine,
+    inspire du modele communautaire "Lithophane Helper" (Thingiverse
+    #2718124), teste physiquement avec succes. Voir
+    `core/geometry/support.build_side_stabilizer_pair`. Independant de
+    `support_type` (le pied stabilise la base, les stabilisateurs
+    maintiennent les cotes -- les deux peuvent etre actifs ensemble)."""
 
 
 class ShapeType(Enum):

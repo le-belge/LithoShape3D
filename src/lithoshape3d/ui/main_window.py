@@ -59,7 +59,7 @@ from lithoshape3d.core.geometry.shape import (
     build_shape_mask_from_image_array,
     count_connected_components,
 )
-from lithoshape3d.core.geometry.support import build_support_mesh
+from lithoshape3d.core.geometry.support import build_side_stabilizer_pair, build_support_mesh
 from lithoshape3d.core.image.io import load_image
 from lithoshape3d.core.image.pipeline import image_size
 from lithoshape3d.core.image.preprocessing import (
@@ -642,6 +642,16 @@ class MainWindow(QMainWindow):
         self.support_overhang_right_spin.setValue(5.0)
         support_form.addRow("Debord droit", self.support_overhang_right_spin)
 
+        self.support_side_stabilizers_checkbox = QCheckBox(
+            "Stabilisateurs lateraux (detachables, aide a l'impression debout)"
+        )
+        self.support_side_stabilizers_checkbox.setToolTip(
+            "Deux corps separes qui effleurent les bords gauche/droit du panneau -- "
+            "jamais fusionnes, a detacher apres impression. Inspire du modele "
+            "communautaire 'Lithophane Helper'."
+        )
+        support_form.addRow("", self.support_side_stabilizers_checkbox)
+
         layout.addWidget(support_group)
 
         display_group = QGroupBox("Affichage")
@@ -719,6 +729,7 @@ class MainWindow(QMainWindow):
             self.support_overhang_right_spin,
         ):
             spin.valueChanged.connect(self._on_support_changed)
+        self.support_side_stabilizers_checkbox.toggled.connect(self._on_support_changed)
 
         scroll_area.setWidget(panel)
         # Largeur minimale calculee (pas figee en dur) : sans elle, avec
@@ -1242,6 +1253,7 @@ class MainWindow(QMainWindow):
             self.support_depth_spin,
             self.support_overhang_left_spin,
             self.support_overhang_right_spin,
+            self.support_side_stabilizers_checkbox,
         ):
             widget.blockSignals(True)
         self._set_combo_data(self.support_type_combo, support.support_type)
@@ -1249,12 +1261,14 @@ class MainWindow(QMainWindow):
         self.support_depth_spin.setValue(support.depth_mm)
         self.support_overhang_left_spin.setValue(support.overhang_left_mm)
         self.support_overhang_right_spin.setValue(support.overhang_right_mm)
+        self.support_side_stabilizers_checkbox.setChecked(support.side_stabilizers)
         for widget in (
             self.support_type_combo,
             self.support_height_spin,
             self.support_depth_spin,
             self.support_overhang_left_spin,
             self.support_overhang_right_spin,
+            self.support_side_stabilizers_checkbox,
         ):
             widget.blockSignals(False)
 
@@ -1265,6 +1279,7 @@ class MainWindow(QMainWindow):
         support.depth_mm = self.support_depth_spin.value()
         support.overhang_left_mm = self.support_overhang_left_spin.value()
         support.overhang_right_mm = self.support_overhang_right_spin.value()
+        support.side_stabilizers = self.support_side_stabilizers_checkbox.isChecked()
 
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
@@ -1680,6 +1695,18 @@ class MainWindow(QMainWindow):
             support_mesh = build_support_mesh(x_min, x_max, y_top, support)
             if support_mesh is not None:
                 result["Support"] = (support_mesh, (0.5, 0.5, 0.5))
+
+        if support.side_stabilizers and panel_meshes:
+            x_min = min(float(m.bounds[0][0]) for m in panel_meshes)
+            x_max = max(float(m.bounds[1][0]) for m in panel_meshes)
+            y_min = min(float(m.bounds[0][1]) for m in panel_meshes)
+            y_max = max(float(m.bounds[1][1]) for m in panel_meshes)
+            z_max = max(float(m.bounds[1][2]) for m in panel_meshes)
+            left, right = build_side_stabilizer_pair(x_max - x_min, y_min, y_max, z_max)
+            left.apply_translation([x_min, 0.0, 0.0])
+            right.apply_translation([x_min, 0.0, 0.0])
+            result["Stabilisateur gauche (detachable)"] = (left, (0.6, 0.6, 0.65))
+            result["Stabilisateur droit (detachable)"] = (right, (0.6, 0.6, 0.65))
         return result
 
     # ------------------------------------------------------------------ #
@@ -1702,11 +1729,12 @@ class MainWindow(QMainWindow):
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
 
-        if self._current_backlight_result is not None:
-            # Un seul fichier STL ne suffit pas ici : le corps blanc et l'
-            # insert sont deux volumes physiquement separes a imprimer
-            # independamment (cf. mission 0.4.1 s11 -- lithophane_white.stl +
-            # rose_backlight_insert.stl au minimum).
+        if self._current_backlight_result is not None or self._project.scene.support.side_stabilizers:
+            # Un seul fichier STL ne suffit pas ici : soit le corps blanc et
+            # l'insert Backlight sont deux volumes physiquement separes (cf.
+            # mission 0.4.1 s11), soit les stabilisateurs lateraux (jamais
+            # fusionnes au panneau, detachables) s'y ajoutent -- dans les
+            # deux cas il faut un fichier par corps, pas un seul STL combine.
             self._on_export_backlight_stl_clicked()
             return
 
@@ -1727,22 +1755,27 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "LithoShape3D", f"STL exporte avec succes :\n{path}")
 
     def _on_export_backlight_stl_clicked(self) -> None:
+        """Malgre son nom (garde du chemin Backlight Insert d'origine), ce
+        chemin d'export s'applique a tout resultat necessitant plusieurs
+        fichiers STL distincts : corps blanc + insert Backlight, et/ou
+        stabilisateurs lateraux (toujours des corps SEPARES, jamais
+        fusionnes au panneau) -- voir `_on_export_clicked`."""
         materials = self._materials_for_display()
         material_meshes = {name: mesh for name, (mesh, _color) in materials.items()}
         base_name = self._slugify(self._project.name)
-        directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL (corps blanc + insert)")
+        directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL (un fichier par corps)")
         if not directory:
             return
 
         try:
             written = export_stl_per_material(material_meshes, directory, base_name=base_name)
         except OSError as exc:
-            logger.exception("Echec de l'export STL Backlight Insert")
+            logger.exception("Echec de l'export STL multi-corps")
             QMessageBox.critical(self, "LithoShape3D", f"Echec de l'export :\n{exc}")
             return
 
         names = "\n".join(str(p) for p in written)
-        logger.info("STL Backlight Insert exportes : %s", names)
+        logger.info("STL multi-corps exportes : %s", names)
         self.statusBar().showMessage(f"Export reussi : {directory}", 8000)
         QMessageBox.information(self, "LithoShape3D", f"STL exportes avec succes :\n{names}")
 
