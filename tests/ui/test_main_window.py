@@ -210,3 +210,34 @@ def test_quality_only_presets_do_not_touch_width(main_window, tmp_path):
     main_window._apply_preset("Moyen (standard)")
 
     assert main_window.width_spin.value() == 77.0
+
+
+def _active_workflow_steps(main_window) -> list[str]:
+    return [
+        label.text()
+        for label in main_window._workflow_step_labels
+        if label.property("active")
+    ]
+
+
+def test_workflow_indicator_highlights_image_step_before_any_image(main_window):
+    assert main_window._state is AppState.NO_IMAGE
+    assert _active_workflow_steps(main_window) == ["Image"]
+
+
+def test_workflow_indicator_highlights_zones_and_geometry_after_loading_image(main_window, tmp_path):
+    _load(main_window, tmp_path)
+
+    assert set(_active_workflow_steps(main_window)) == {"Zones", "Geometrie / Backlight"}
+
+
+def test_workflow_indicator_highlights_apercu_and_export_once_mesh_ready(qapp, main_window, tmp_path):
+    _load(main_window, tmp_path)
+    main_window._on_generate_clicked()
+    deadline = time.monotonic() + 10
+    while main_window._state is AppState.GENERATING and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert main_window._state is AppState.MESH_READY
+    assert set(_active_workflow_steps(main_window)) == {"Apercu", "Export"}

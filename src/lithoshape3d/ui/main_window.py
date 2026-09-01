@@ -259,6 +259,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
 
+        root_layout.addWidget(self._build_workflow_indicator())
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)  # aucun panneau ne doit pouvoir disparaitre a 0px
         splitter.addWidget(self._build_source_panel())
@@ -860,12 +862,63 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     # ------------------------------------------------------------------ #
-    # Etat
+    # Reperes de parcours (retour terrain : rendre visible et permanent
+    # l'enchainement Image -> Zones -> Geometrie/Backlight -> Apercu ->
+    # Export, sans wizard ni ecran d'accueil qui ralentirait un utilisateur
+    # avance -- une simple bande sobre, toujours visible, jamais bloquante)
     # ------------------------------------------------------------------ #
+    _WORKFLOW_STEPS: tuple[str, ...] = (
+        "Image",
+        "Zones",
+        "Geometrie / Backlight",
+        "Apercu",
+        "Export",
+    )
+
+    def _build_workflow_indicator(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("workflowIndicator")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(6)
+
+        self._workflow_step_labels: list[QLabel] = []
+        for index, name in enumerate(self._WORKFLOW_STEPS):
+            if index > 0:
+                arrow = QLabel("›")  # "›"
+                arrow.setObjectName("workflowArrow")
+                layout.addWidget(arrow)
+            label = QLabel(name)
+            label.setObjectName("workflowStep")
+            layout.addWidget(label)
+            self._workflow_step_labels.append(label)
+        layout.addStretch(1)
+        return bar
+
+    def _update_workflow_indicator(self, state: AppState) -> None:
+        # Deux etapes (Zones, Geometrie/Backlight) partagent les memes
+        # AppState (IMAGE_LOADED/PARAMS_DIRTY) : impossible de les
+        # distinguer plus finement sans etat dedie, et ce n'est pas
+        # necessaire -- les deux se configurent en parallele dans l'UI
+        # reelle (panneaux gauche/droit toujours visibles simultanement).
+        active_by_step = {
+            "Image": state is AppState.NO_IMAGE,
+            "Zones": state in (AppState.IMAGE_LOADED, AppState.PARAMS_DIRTY),
+            "Geometrie / Backlight": state in (AppState.IMAGE_LOADED, AppState.PARAMS_DIRTY),
+            "Apercu": state in (AppState.GENERATING, AppState.MESH_READY),
+            "Export": state is AppState.MESH_READY,
+        }
+        for label in self._workflow_step_labels:
+            is_active = active_by_step.get(label.text(), False)
+            label.setProperty("active", is_active)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
     def _set_state(self, state: AppState) -> None:
         self._state = state
         self.statusBar().showMessage(_STATE_MESSAGES[state])
         self.stale_banner.setVisible(state is AppState.PARAMS_DIRTY)
+        self._update_workflow_indicator(state)
 
         has_image = self._image_path is not None
         generating = state is AppState.GENERATING

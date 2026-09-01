@@ -101,6 +101,24 @@ QLabel#aboutVersion {{
     color: {TEXT_MUTED};
     font-size: 12px;
 }}
+QWidget#workflowIndicator {{
+    background-color: {SURFACE_ALT};
+    border-bottom: 1px solid {BORDER};
+}}
+QLabel#workflowStep {{
+    color: {TEXT_MUTED};
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}}
+QLabel#workflowStep[active="true"] {{
+    color: {ACCENT};
+}}
+QLabel#workflowArrow {{
+    color: {BORDER};
+    font-size: 11.5px;
+}}
+
 QLabel#aboutCopyright {{
     color: {TEXT_MUTED};
     font-size: 11px;
