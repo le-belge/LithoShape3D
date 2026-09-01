@@ -206,6 +206,23 @@ negatif (le corps du coin s'eloignait du panneau vers Z<0) -- inverse
 pour obtenir une profondeur positive (Z=0 au contact, Z croissant en
 s'eloignant), plus lisible/coherent avec le reste du module."""
 
+_STABILIZER_RIDGE_DEPTH_MM = 15.0
+"""Position Z (mm, repere du gabarit apres rotation+mise a plat, AVANT
+mise a l'echelle en hauteur) du CENTRE de la nervure de contact -- le
+coin est symetrique (nervure a l'ancien X natif 14-16mm, sur une largeur
+totale de 30mm), donc naturellement au milieu de sa profondeur propre.
+Mesuree directement par coupe transversale (voir
+`tests/core/geometry/test_support.py`), PAS redessinee a la main.
+
+Bug reel corrige ici (retour terrain, mesure au regle du slicer sur un
+export reel : ~13mm d'ecart) : cette profondeur (15mm) n'a AUCUN rapport
+avec l'epaisseur du panneau lui-meme (souvent < 3mm) -- sans
+realignement explicite, la nervure de contact se retrouve tres loin
+(en profondeur/epaisseur) de la ou le panneau existe reellement, et les
+deux corps ne se touchent jamais malgre un alignement X/Y par ailleurs
+correct. `build_side_stabilizer_mesh` recentre donc la nervure sur le
+MILIEU de l'epaisseur reelle du panneau (`panel_thickness_mm / 2`)."""
+
 _stabilizer_template_cache: trimesh.Trimesh | None = None
 
 
@@ -230,6 +247,7 @@ def build_side_stabilizer_mesh(
     y_bottom: float,
     y_top: float,
     side: str,
+    panel_thickness_mm: float,
 ) -> trimesh.Trimesh:
     """Charge le gabarit "Lithophane Helper" (deja tourne pour presenter
     ses dents de contact le long de X, voir `_load_stabilizer_template`)
@@ -242,11 +260,19 @@ def build_side_stabilizer_mesh(
     Positionne pour que les dents affleurent le bord gauche
     (`side="left"`, bord a X=0) ou droit (`side="right"`, bord a
     X=`panel_width_mm` -- fourni par l'appelant via une translation,
-    cf. `build_side_stabilizer_pair`, point d'entree recommande)."""
+    cf. `build_side_stabilizer_pair`, point d'entree recommande).
+
+    `panel_thickness_mm` (obligatoire, cf. bug reel documente sur
+    `_STABILIZER_RIDGE_DEPTH_MM`) : recentre la nervure de contact sur le
+    MILIEU de l'epaisseur reelle du panneau -- sans ce recalage, la
+    nervure reste a sa position native (profondeur 15mm), sans aucun
+    rapport avec ou le panneau existe reellement."""
     if y_top <= y_bottom:
         raise ValueError("y_top doit etre strictement superieur a y_bottom.")
     if side not in ("left", "right"):
         raise ValueError(f"side doit etre 'left' ou 'right', recu {side!r}.")
+    if panel_thickness_mm <= 0:
+        raise ValueError("panel_thickness_mm doit etre > 0.")
 
     height_mm = y_top - y_bottom
     scale_y = height_mm / _STABILIZER_TEMPLATE_NATIVE_HEIGHT_MM
@@ -260,7 +286,10 @@ def build_side_stabilizer_mesh(
     # le panneau. Decale donc pour amener la pointe des dents (pas le
     # dos) exactement a X=0, le dos s'eloignant alors en X negatif.
     tooth_reach = float(result.bounds[1][0])
-    result.apply_translation([-tooth_reach, y_bottom, 0.0])
+    ridge_z_target = panel_thickness_mm / 2.0
+    result.apply_translation(
+        [-tooth_reach, y_bottom, ridge_z_target - _STABILIZER_RIDGE_DEPTH_MM]
+    )
 
     # Position "gauche" par construction (dents a X=0, dos en X<0). Pour
     # le bord droit, miroiter en X (dents restent a X=0, dos passe en
@@ -276,7 +305,7 @@ def build_side_stabilizer_pair(
     panel_width_mm: float,
     y_bottom: float,
     y_top: float,
-    panel_max_thickness_mm: float | None = None,
+    panel_thickness_mm: float,
 ) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     """Point d'entree recommande : construit et positionne les DEUX
     stabilisateurs (gauche affleurant X=0, droit affleurant
@@ -284,11 +313,11 @@ def build_side_stabilizer_pair(
     (meme repere XYZ, aucun repositionnement manuel necessaire dans le
     slicer -- meme convention que les autres corps generes par ce module).
 
-    `panel_max_thickness_mm` est accepte pour compatibilite ascendante
-    (ancienne signature) mais ignore : le gabarit reel a sa propre
-    epaisseur fixe (5mm), independante de celle du panneau."""
-    left = build_side_stabilizer_mesh(y_bottom, y_top, "left")
-    right = build_side_stabilizer_mesh(y_bottom, y_top, "right")
+    `panel_thickness_mm` : epaisseur reelle du panneau (Z max), utilisee
+    pour recentrer la nervure de contact -- voir docstring de
+    `build_side_stabilizer_mesh` et `_STABILIZER_RIDGE_DEPTH_MM`."""
+    left = build_side_stabilizer_mesh(y_bottom, y_top, "left", panel_thickness_mm)
+    right = build_side_stabilizer_mesh(y_bottom, y_top, "right", panel_thickness_mm)
     right.apply_translation([panel_width_mm, 0.0, 0.0])
     return left, right
 

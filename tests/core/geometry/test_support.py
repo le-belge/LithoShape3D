@@ -126,21 +126,25 @@ def test_support_fuses_with_a_shape_whose_lowest_point_is_above_y_zero(support_t
 # --------------------------------------------------------------------- #
 
 
-def _contact_x_at_height(mesh, y: float, *, x_max: bool):
-    """Coupe transversale a la hauteur `y` : X le plus proche du panneau
-    (max pour le stabilisateur gauche, min pour le droit -- apres
-    rotation du gabarit, ce sont les DENTS, pas le dos plat, qui
-    atteignent cette valeur, periodiquement le long de Y -- voir
-    docstring de module)."""
+def _contact_point_at_height(mesh, y: float, *, x_max: bool):
+    """Coupe transversale a la hauteur `y` : point de contact le plus
+    proche du panneau (max en X pour le stabilisateur gauche, min pour
+    le droit -- apres rotation du gabarit, ce sont les DENTS, pas le dos
+    plat, qui atteignent cette valeur, periodiquement le long de Y --
+    voir docstring de module). Retourne (x, z) du point trouve, ou None
+    si aucune section a cette hauteur."""
     section = mesh.section(plane_origin=[0, y, 0], plane_normal=[0, 1, 0])
     if section is None:
         return None
-    pts = section.vertices[:, 0]
-    return float(pts.max() if x_max else pts.min())
+    pts = section.vertices
+    idx = int(np.argmax(pts[:, 0]) if x_max else np.argmin(pts[:, 0]))
+    return float(pts[idx, 0]), float(pts[idx, 2])
 
 
 def test_side_stabilizer_pair_are_watertight_and_never_fused():
-    left, right = build_side_stabilizer_pair(panel_width_mm=100.0, y_bottom=0.0, y_top=140.0)
+    left, right = build_side_stabilizer_pair(
+        panel_width_mm=100.0, y_bottom=0.0, y_top=140.0, panel_thickness_mm=2.65
+    )
 
     for mesh in (left, right):
         result = validate_mesh(mesh)
@@ -155,26 +159,63 @@ def test_side_stabilizer_teeth_touch_the_panel_edges_periodically_never_beyond()
     (droite) a certaines hauteurs (motif periodique), et le corps ne
     depasse JAMAIS ce bord (jamais de chevauchement dans le panneau)."""
     panel_width = 100.0
-    left, right = build_side_stabilizer_pair(panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0)
+    left, right = build_side_stabilizer_pair(
+        panel_width_mm=panel_width, y_bottom=0.0, y_top=140.0, panel_thickness_mm=2.65
+    )
 
-    left_contacts = [_contact_x_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)]
-    assert any(x == pytest.approx(0.0, abs=1e-3) for x in left_contacts), (
+    left_contacts = [
+        _contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)
+    ]
+    left_x = [x for x, _z in left_contacts]
+    assert any(x == pytest.approx(0.0, abs=1e-3) for x in left_x), (
         "Aucune dent ne touche exactement X=0 sur le stabilisateur gauche."
     )
-    assert all(x <= 1e-6 for x in left_contacts), "Le stabilisateur gauche deborde dans le panneau."
+    assert all(x <= 1e-6 for x in left_x), "Le stabilisateur gauche deborde dans le panneau."
 
-    right_contacts = [_contact_x_at_height(right, y, x_max=False) for y in np.linspace(2.0, 138.0, 12)]
-    assert any(x == pytest.approx(panel_width, abs=1e-3) for x in right_contacts), (
+    right_contacts = [
+        _contact_point_at_height(right, y, x_max=False) for y in np.linspace(2.0, 138.0, 12)
+    ]
+    right_x = [x for x, _z in right_contacts]
+    assert any(x == pytest.approx(panel_width, abs=1e-3) for x in right_x), (
         "Aucune dent ne touche exactement X=panel_width_mm sur le stabilisateur droit."
     )
-    assert all(x >= panel_width - 1e-6 for x in right_contacts), (
+    assert all(x >= panel_width - 1e-6 for x in right_x), (
         "Le stabilisateur droit deborde dans le panneau."
     )
 
 
+def test_side_stabilizer_contact_ridge_is_aligned_with_panel_thickness_in_depth():
+    """Regression du bug reel signale par l'utilisateur (mesure au regle
+    du slicer sur un export reel : ~13mm d'ecart en profondeur/Y, alors
+    que X touchait deja parfaitement) : la nervure de contact du gabarit
+    est nativement centree a 15mm de profondeur (moitie de sa largeur
+    native 30mm), SANS AUCUN RAPPORT avec l'epaisseur du panneau -- sans
+    recalage explicite, les dents "touchent" X=0/panel_width_mm en
+    projection plate, mais a une profondeur Z totalement hors de la ou
+    le panneau existe reellement (Z=[0, panel_thickness_mm]), donc sans
+    contact reel en 3D. Verifie que le point de contact (X) trouve a
+    chaque hauteur testee a aussi un Z a l'INTERIEUR de l'epaisseur
+    reelle du panneau."""
+    panel_thickness = 2.65
+    left, _right = build_side_stabilizer_pair(
+        panel_width_mm=100.0, y_bottom=0.0, y_top=140.0, panel_thickness_mm=panel_thickness
+    )
+
+    contacts = [_contact_point_at_height(left, y, x_max=True) for y in np.linspace(2.0, 138.0, 12)]
+    touching_zs = [z for x, z in contacts if x == pytest.approx(0.0, abs=1e-3)]
+    assert touching_zs, "Aucun point de contact (X=0) trouve -- verifier le motif periodique."
+    for z in touching_zs:
+        assert -1e-6 <= z <= panel_thickness + 1e-6, (
+            f"Nervure de contact a Z={z:.2f}mm, hors de l'epaisseur du panneau "
+            f"[0, {panel_thickness}]mm -- pas de contact 3D reel malgre un X correct."
+        )
+
+
 def test_side_stabilizer_spans_the_full_panel_height():
     y_bottom, y_top = 5.0, 145.0
-    left, _right = build_side_stabilizer_pair(panel_width_mm=100.0, y_bottom=y_bottom, y_top=y_top)
+    left, _right = build_side_stabilizer_pair(
+        panel_width_mm=100.0, y_bottom=y_bottom, y_top=y_top, panel_thickness_mm=2.65
+    )
 
     # Tolerance non-triviale : le gabarit source a lui-meme un residu
     # sub-micrometrique sur ses propres bornes (STL tel que fourni, avant
@@ -183,16 +224,19 @@ def test_side_stabilizer_spans_the_full_panel_height():
     assert left.bounds[1][1] == pytest.approx(y_top, abs=1e-3)
 
 
-def test_side_stabilizer_depth_matches_the_original_template_regardless_of_panel():
-    """Le gabarit reel a sa propre profondeur fixe (30mm, ancien axe
-    largeur du coin avant rotation) -- contrairement a l'ancienne
-    approximation, elle ne suit JAMAIS l'epaisseur du panneau (une
-    lithophanie fine de 0.8mm n'a pas besoin d'un stabilisateur aussi
-    fin et fragile)."""
-    thin_panel = build_side_stabilizer_mesh(0.0, 100.0, side="left")
-    assert thin_panel.bounds[1][2] == pytest.approx(30.0, abs=1e-3)
+def test_side_stabilizer_depth_extent_matches_the_original_template_regardless_of_panel():
+    """Le gabarit reel a sa propre etendue de profondeur fixe (30mm,
+    ancien axe largeur du coin avant rotation) -- contrairement a
+    l'ancienne approximation, elle ne suit JAMAIS l'epaisseur du panneau
+    (une lithophanie fine de 0.8mm n'a pas besoin d'un stabilisateur
+    aussi fin et fragile). Seule la POSITION (pas l'etendue) de cette
+    plage de 30mm change avec panel_thickness_mm, pour recentrer la
+    nervure -- voir test dedie ci-dessus."""
+    thin_panel = build_side_stabilizer_mesh(0.0, 100.0, side="left", panel_thickness_mm=0.8)
+    depth_extent = thin_panel.bounds[1][2] - thin_panel.bounds[0][2]
+    assert depth_extent == pytest.approx(30.0, abs=1e-3)
 
 
 def test_side_stabilizer_rejects_invalid_side():
     with pytest.raises(ValueError, match="side"):
-        build_side_stabilizer_mesh(0.0, 100.0, side="top")
+        build_side_stabilizer_mesh(0.0, 100.0, side="top", panel_thickness_mm=2.65)
