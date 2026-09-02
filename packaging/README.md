@@ -54,6 +54,29 @@ au 29/08/2026). Le spec suit la meme strategie que le spec macOS deja
 valide (meme point d'entree, meme collecte de sous-modules PyVista/VTK/
 trimesh).
 
+### Installeur Windows (Inno Setup)
+
+En plus du dossier brut PyInstaller, la CI produit un vrai installeur
+`.exe` via `packaging/lithoshape3d_installer.iss` (Inno Setup 6, installe
+sur le runner via `choco install innosetup`) :
+
+```powershell
+iscc packaging\lithoshape3d_installer.iss /DAppVersion=0.4.2
+```
+
+Produit `packaging\dist_installer\LithoShape3D-Setup-<version>.exe` --
+installation dans Program Files, raccourcis menu Demarrer et bureau
+(optionnel), desinstalleur, entree "Applications et fonctionnalites".
+La version est lue dynamiquement depuis `lithoshape3d.__version__` par la
+CI (etape "Determine app version") pour rester synchronisee avec
+`pyproject.toml` sans duplication manuelle.
+
+Artefact CI : `LithoShape3D-installer` (le `.exe` d'installation seul,
+quelques dizaines de Mo compresses en LZMA2 contre ~725 Mo pour le dossier
+brut). C'est ce fichier qu'il faut partager avec un utilisateur final --
+il double-clique, suit l'assistant, et obtient une app installee
+proprement avec desinstalleur.
+
 ### Limite connue : pas de smoke test CI pour l'UI graphique
 
 Tente dans cette session (voir historique des runs

@@ -48,3 +48,24 @@ jobs:
         with:
           name: LithoShape3D-windows
           path: packaging/dist/LithoShape3D/
+
+      - name: Determine app version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (python -c "import sys; sys.path.insert(0, 'src'); import lithoshape3d; print(lithoshape3d.__version__)")
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        working-directory: packaging
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" lithoshape3d_installer.iss /DAppVersion=${{ steps.version.outputs.version }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LithoShape3D-installer
+          path: packaging/dist_installer/LithoShape3D-Setup-${{ steps.version.outputs.version }}.exe
