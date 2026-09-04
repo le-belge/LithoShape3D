@@ -254,6 +254,16 @@ class MainWindow(QMainWindow):
         self._current_backlight_result: BacklightComposition | None = None
         self._state = AppState.NO_IMAGE
         self._thread_pool = QThreadPool.globalInstance()
+        # Le detourage automatique (ai/background_removal.py, isnet-general-use
+        # via rembg) declenche de la compilation JIT LLVM (numba/llvmlite) en
+        # coulisses -- constate en crash reel (EXC_BAD_ACCESS/SIGBUS, "stack
+        # guard region") sur une vraie photo haute resolution : la pile par
+        # defaut d'un thread QThreadPool (~512 Ko sur macOS) est trop petite
+        # pour la finalisation LLVM. 16 Mo (taille usuelle d'une pile de
+        # thread principal) donne une marge confortable. Doit etre positionne
+        # avant le premier worker demarre sur ce pool (Qt l'ignore sinon pour
+        # les threads deja crees).
+        self._thread_pool.setStackSize(16 * 1024 * 1024)
         self._segmentation_backend = _create_segmentation_backend()
 
         central = QWidget()

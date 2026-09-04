@@ -8,7 +8,7 @@ racine du depot (avec le venv actif -- app-full recommande).
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # source de verite unique pour la version (voir pyproject.toml
 # [tool.hatch.version]) -- evite de figer un numero en dur ici, qui avait
@@ -35,6 +35,12 @@ datas = (
     # etre embarques dans le bundle, sinon build_side_stabilizer_pair echoue
     # a l'execution dans l'app packagee.
     + collect_data_files("lithoshape3d")
+    # pymatting (dependance de rembg) lit sa propre version via
+    # importlib.metadata.version() SANS filet de secours (contrairement a
+    # rembg qui tolere l'absence de metadonnees) -- PyInstaller n'embarque
+    # pas les .dist-info par defaut, ce qui faisait planter le detourage
+    # automatique a l'execution dans l'app packagee (PackageNotFoundError).
+    + copy_metadata("pymatting")
 )
 
 a = Analysis(

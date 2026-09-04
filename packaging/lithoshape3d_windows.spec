@@ -16,7 +16,7 @@ ai/segmentation/sam2_coreml_backend.py), mais on evite aussi de tirer
 n'est de toute facon pas l'extra recommande sous Windows, `app` suffit).
 """
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 block_cipher = None
 
@@ -37,6 +37,12 @@ datas = (
     # etre embarques dans le bundle, sinon build_side_stabilizer_pair echoue
     # a l'execution dans l'app packagee.
     + collect_data_files("lithoshape3d")
+    # pymatting (dependance de rembg) lit sa propre version via
+    # importlib.metadata.version() SANS filet de secours (contrairement a
+    # rembg qui tolere l'absence de metadonnees) -- PyInstaller n'embarque
+    # pas les .dist-info par defaut, ce qui faisait planter le detourage
+    # automatique a l'execution dans l'app packagee (PackageNotFoundError).
+    + copy_metadata("pymatting")
 )
 
 a = Analysis(
