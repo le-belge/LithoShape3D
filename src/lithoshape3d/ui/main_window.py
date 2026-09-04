@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
         self._zone_masks: dict[str, np.ndarray] = {}
 
         self._image_path: str | None = None
+        self._auto_background_color_image = None
         self._image_width_px = 0
         self._image_height_px = 0
         self._current_mesh = None
@@ -375,6 +376,18 @@ class MainWindow(QMainWindow):
         self.zoom_preview_button.setEnabled(False)
         self.zoom_preview_button.clicked.connect(self._on_zoom_preview_clicked)
         layout.addWidget(self.zoom_preview_button)
+
+        self.remove_background_button = QPushButton("Retirer le fond...")
+        self.remove_background_button.setEnabled(False)
+        self.remove_background_button.clicked.connect(self._on_remove_background_auto_clicked)
+        layout.addWidget(self.remove_background_button)
+
+        self.remove_background_manual_button = QPushButton("Retirer le fond (precision manuelle)...")
+        self.remove_background_manual_button.setEnabled(False)
+        self.remove_background_manual_button.clicked.connect(self._on_remove_background_manual_clicked)
+        if self._segmentation_backend is None:
+            self.remove_background_manual_button.setToolTip("Necessite macOS (SAM2)")
+        layout.addWidget(self.remove_background_manual_button)
 
         self.filename_label = QLabel("")
         self.filename_label.setWordWrap(True)
@@ -971,6 +984,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(generating)
 
         self.new_zone_button.setEnabled(has_image and not generating)
+        self.remove_background_button.setEnabled(has_image and not generating)
+        self.remove_background_manual_button.setEnabled(
+            has_image and not generating and self._segmentation_backend is not None
+        )
         self.delete_zone_button.setEnabled(not generating and self._active_zone() is not None)
         self.edit_mask_button.setEnabled(not generating and self._active_zone() is not None)
         self.zones_list.setEnabled(not generating)
@@ -1604,6 +1621,111 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._zone_masks[zone.id] = dialog.resulting_mask()
             self._update_source_preview()
+
+    def _on_remove_background_manual_clicked(self) -> None:
+        if not self._image_path or self._segmentation_backend is None:
+            return
+
+        color_image = load_image(self._image_path).convert("RGB")
+        base_array = to_grayscale_array(color_image)  # resolution native, jamais modifiee
+
+        dialog = MaskEditorDialog(
+            "Sujet",
+            base_array,
+            np.zeros(base_array.shape, dtype=np.float32),
+            zone_color(0),
+            segmentation_backend=self._segmentation_backend,
+            parent=self,
+            subject_isolation_mode=True,
+        )
+        if not dialog.exec():
+            return
+        alpha_mask = dialog.resulting_alpha_mask()
+        if alpha_mask is None:
+            return
+        self._export_detoured_image(color_image, alpha_mask)
+
+    def _on_remove_background_auto_clicked(self) -> None:
+        if not self._image_path:
+            return
+
+        from lithoshape3d.ai.background_removal import is_downloaded
+
+        if not is_downloaded():
+            self._offer_auto_background_model_download()
+            return
+
+        self._run_auto_background_removal()
+
+    def _offer_auto_background_model_download(self) -> None:
+        from lithoshape3d.ai.background_removal import APPROX_SIZE_MB, LICENSE
+        from lithoshape3d.ui.segmentation_worker import DownloadAutoBackgroundModelWorker
+
+        reply = QMessageBox.question(
+            self,
+            "Retirer le fond",
+            f"Le modele de detourage automatique (rembg, licence {LICENSE}, "
+            f"~{APPROX_SIZE_MB} Mo) n'est pas encore installe.\n\n"
+            "Le telecharger maintenant ? Il sera conserve dans un cache local "
+            "et reutilise ensuite : aucune image n'est jamais envoyee en ligne.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.remove_background_button.setEnabled(False)
+        self.statusBar().showMessage("Telechargement du modele de detourage en cours...")
+        worker = DownloadAutoBackgroundModelWorker()
+        worker.signals.finished.connect(self._on_auto_background_model_downloaded)
+        worker.signals.failed.connect(self._on_auto_background_failed)
+        self._thread_pool.start(worker)
+
+    def _on_auto_background_model_downloaded(self) -> None:
+        self.remove_background_button.setEnabled(True)
+        self.statusBar().showMessage("Modele installe.", 3000)
+        self._run_auto_background_removal()
+
+    def _run_auto_background_removal(self) -> None:
+        from lithoshape3d.ui.segmentation_worker import AutoBackgroundRemovalWorker
+
+        color_image = load_image(self._image_path).convert("RGB")
+        self._auto_background_color_image = color_image
+        self.remove_background_button.setEnabled(False)
+        self.statusBar().showMessage("Detourage en cours...")
+        worker = AutoBackgroundRemovalWorker(color_image)
+        worker.signals.mask_ready.connect(self._on_auto_background_mask_ready)
+        worker.signals.failed.connect(self._on_auto_background_failed)
+        self._thread_pool.start(worker)
+
+    def _on_auto_background_mask_ready(self, mask: np.ndarray) -> None:
+        self.remove_background_button.setEnabled(True)
+        self.statusBar().showMessage("Detourage termine.", 3000)
+        self._export_detoured_image(self._auto_background_color_image, mask)
+
+    def _on_auto_background_failed(self, message: str) -> None:
+        self.remove_background_button.setEnabled(True)
+        logger.error("Detourage automatique : %s", message)
+        self.statusBar().clearMessage()
+        QMessageBox.warning(
+            self,
+            "Retirer le fond",
+            "Le detourage automatique a echoue. Vous pouvez essayer la "
+            "precision manuelle si disponible (necessite macOS).",
+        )
+
+    def _export_detoured_image(self, color_image, alpha_mask: np.ndarray) -> None:
+        rgb = np.asarray(color_image, dtype=np.uint8)
+        alpha = np.clip(alpha_mask * 255.0, 0, 255).astype(np.uint8)
+        rgba = np.dstack([rgb, alpha])
+
+        suggested_name = f"{Path(self._image_path).stem}-detoure.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter l'image detouree", suggested_name, "PNG (*.png)"
+        )
+        if not path:
+            return
+        Image.fromarray(rgba, "RGBA").save(path, "PNG")
+        self.statusBar().showMessage(f"Image detouree exportee : {Path(path).name}", 5000)
 
     # ------------------------------------------------------------------ #
     # Parametres / presets

@@ -85,3 +85,50 @@ class DownloadModelWorker(QRunnable):
             self.signals.failed.emit(str(exc))
             return
         self.signals.finished.emit()
+
+
+class DownloadAutoBackgroundModelWorker(QRunnable):
+    """Telecharge le modele rembg/U2Net vers le cache utilisateur (voir
+    ai/background_removal.py). Ne s'execute qu'a la demande explicite de
+    l'utilisateur, jamais automatiquement."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.signals = DownloadModelSignals()
+
+    def run(self) -> None:
+        try:
+            from lithoshape3d.ai.background_removal import download
+
+            download()
+        except Exception as exc:
+            logger.exception("Echec du telechargement du modele de detourage automatique")
+            self.signals.failed.emit(str(exc))
+            return
+        self.signals.finished.emit()
+
+
+class AutoBackgroundSignals(QObject):
+    mask_ready = Signal(object)  # np.ndarray
+    failed = Signal(str)
+
+
+class AutoBackgroundRemovalWorker(QRunnable):
+    """Detourage automatique (rembg) d'une image entiere, sans point de
+    prompt -- voir ai/background_removal.py."""
+
+    def __init__(self, image) -> None:
+        super().__init__()
+        self.image = image
+        self.signals = AutoBackgroundSignals()
+
+    def run(self) -> None:
+        try:
+            from lithoshape3d.ai.background_removal import remove_background
+
+            mask = remove_background(self.image)
+        except Exception as exc:
+            logger.exception("Echec du detourage automatique")
+            self.signals.failed.emit(str(exc))
+            return
+        self.signals.mask_ready.emit(mask)

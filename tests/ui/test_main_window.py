@@ -1,6 +1,10 @@
 import time
 
+import numpy as np
+
+from lithoshape3d.ai.segmentation import MockSegmentationBackend
 from lithoshape3d.core.scene.models import CompositionMode, ReliefMode
+from lithoshape3d.ui import main_window as main_window_module
 from lithoshape3d.ui.state import AppState
 from tests.fixtures.synthetic_images import make_gradient_image
 
@@ -305,3 +309,139 @@ def test_workflow_tab_export_shows_status_message_when_not_ready(main_window):
     _workflow_button(main_window, "Export").click()
 
     assert "Generez d'abord" in main_window.statusBar().currentMessage()
+
+
+def test_remove_background_auto_button_enabled_with_image_regardless_of_sam2_backend(
+    main_window, tmp_path
+):
+    main_window._segmentation_backend = None
+    _load(main_window, tmp_path)
+
+    assert main_window.remove_background_button.isEnabled()
+
+
+def test_remove_background_auto_button_disabled_without_image(main_window):
+    main_window._set_state(main_window._state)
+
+    assert not main_window.remove_background_button.isEnabled()
+
+
+def test_remove_background_manual_button_disabled_without_backend_even_with_image(
+    main_window, tmp_path
+):
+    main_window._segmentation_backend = None
+    _load(main_window, tmp_path)
+
+    assert not main_window.remove_background_manual_button.isEnabled()
+
+
+def test_remove_background_manual_button_disabled_without_image_even_with_backend(main_window):
+    main_window._segmentation_backend = MockSegmentationBackend()
+    main_window._set_state(main_window._state)
+
+    assert not main_window.remove_background_manual_button.isEnabled()
+
+
+def test_remove_background_manual_button_enabled_with_image_and_backend(main_window, tmp_path):
+    main_window._segmentation_backend = MockSegmentationBackend()
+    _load(main_window, tmp_path)
+
+    assert main_window.remove_background_manual_button.isEnabled()
+
+
+def test_remove_background_manual_exports_rgba_png_from_alpha_mask(main_window, tmp_path, monkeypatch):
+    from PIL import Image
+
+    main_window._segmentation_backend = MockSegmentationBackend()
+    image_path = _load(main_window, tmp_path)
+    width, height = Image.open(image_path).size
+
+    alpha_mask = np.zeros((height, width), dtype=np.float32)
+    alpha_mask[height // 2, width // 2] = 1.0
+
+    class _FakeDialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return True
+
+        def resulting_alpha_mask(self):
+            return alpha_mask
+
+    monkeypatch.setattr(main_window_module, "MaskEditorDialog", _FakeDialog)
+
+    out_path = tmp_path / "gradient-detoure.png"
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(out_path), "PNG (*.png)"),
+    )
+
+    main_window._on_remove_background_manual_clicked()
+
+    assert out_path.exists()
+    exported = Image.open(out_path)
+    assert exported.mode == "RGBA"
+    exported_alpha = np.asarray(exported)[:, :, 3]
+    assert exported_alpha[height // 2, width // 2] == 255
+    assert exported_alpha[0, 0] == 0
+
+
+def test_remove_background_auto_downloaded_model_runs_directly_and_exports(
+    main_window, tmp_path, monkeypatch, qapp
+):
+    from PIL import Image
+
+    image_path = _load(main_window, tmp_path)
+    width, height = Image.open(image_path).size
+
+    monkeypatch.setattr("lithoshape3d.ai.background_removal.is_downloaded", lambda: True)
+
+    alpha_mask = np.zeros((height, width), dtype=np.float32)
+    alpha_mask[height // 2, width // 2] = 1.0
+    monkeypatch.setattr(
+        "lithoshape3d.ai.background_removal.remove_background", lambda image: alpha_mask
+    )
+
+    out_path = tmp_path / "gradient-detoure-auto.png"
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(out_path), "PNG (*.png)"),
+    )
+
+    main_window._on_remove_background_auto_clicked()
+
+    deadline = time.monotonic() + 10
+    while not out_path.exists() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert out_path.exists()
+    exported = Image.open(out_path)
+    assert exported.mode == "RGBA"
+    exported_alpha = np.asarray(exported)[:, :, 3]
+    assert exported_alpha[height // 2, width // 2] == 255
+    assert exported_alpha[0, 0] == 0
+    assert main_window.remove_background_button.isEnabled()
+
+
+def test_remove_background_auto_offers_download_when_model_missing(
+    main_window, tmp_path, monkeypatch
+):
+    _load(main_window, tmp_path)
+    monkeypatch.setattr(
+        "lithoshape3d.ai.background_removal.is_downloaded", lambda: False
+    )
+    asked = {}
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *args, **kwargs: asked.setdefault("called", True)
+        or main_window_module.QMessageBox.StandardButton.No,
+    )
+
+    main_window._on_remove_background_auto_clicked()
+
+    assert asked.get("called") is True

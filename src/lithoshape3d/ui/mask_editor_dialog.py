@@ -291,9 +291,11 @@ class MaskEditorDialog(QDialog):
         color,
         segmentation_backend: SegmentationBackend | None = None,
         parent=None,
+        subject_isolation_mode: bool = False,
     ):
         super().__init__(parent)
-        self.setWindowTitle(f"Editer le masque - {zone_name}")
+        self.subject_isolation_mode = subject_isolation_mode
+        self.setWindowTitle("Retirer le fond" if subject_isolation_mode else f"Editer le masque - {zone_name}")
         self.resize(760, 680)
 
         self.controller = MaskEditController(initial_mask)
@@ -304,6 +306,7 @@ class MaskEditorDialog(QDialog):
         self._segmentation_session = None
         self._thread_pool = QThreadPool.globalInstance()
         self._ai_points: list[tuple[float, float, bool]] = []
+        self._resulting_alpha_mask: np.ndarray | None = None
 
         layout = QVBoxLayout(self)
         toolbar = QHBoxLayout()
@@ -413,6 +416,20 @@ class MaskEditorDialog(QDialog):
 
         self.addAction(_shortcut_action(self, QKeySequence.StandardKey.Undo, self._on_undo))
         self.addAction(_shortcut_action(self, QKeySequence.StandardKey.Redo, self._on_redo))
+
+        if subject_isolation_mode:
+            for widget in (
+                self.brush_button,
+                self.eraser_button,
+                self.size_spin,
+                self.clear_button,
+                self.fill_button,
+                self.invert_button,
+                self.undo_button,
+                self.redo_button,
+            ):
+                widget.setVisible(False)
+            self._set_tool("ai")
 
     # ------------------------------------------------------------------ #
     # Outils pinceau/gomme/global
@@ -562,10 +579,23 @@ class MaskEditorDialog(QDialog):
     def _on_ai_apply(self) -> None:
         if self.canvas.preview_mask is None:
             return
+        if self.subject_isolation_mode:
+            self._resulting_alpha_mask = self.canvas.preview_mask.astype(np.float32).copy()
+            self.controller.apply_external_mask((self.canvas.preview_mask >= 0.5).astype(np.float32))
+            self._on_ai_reset()
+            self.canvas.refresh()
+            self.accept()
+            return
         self.controller.apply_external_mask((self.canvas.preview_mask >= 0.5).astype(np.float32))
         self._on_ai_reset()
         self._set_tool("brush")
         self.canvas.refresh()
+
+    def resulting_alpha_mask(self) -> np.ndarray | None:
+        """Masque de probabilite continu [0,1] retenu en mode isolation de
+        sujet (non binarise, pour un bord detoure lisse) -- None si aucune
+        segmentation n'a encore ete appliquee."""
+        return self._resulting_alpha_mask
 
 
 def _shortcut_action(parent, standard_key, callback):

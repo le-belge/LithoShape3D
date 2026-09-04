@@ -25,6 +25,8 @@ hidden_imports = (
     + collect_submodules("pyvistaqt")
     + collect_submodules("vtkmodules")
     + collect_submodules("trimesh")
+    + collect_submodules("rembg")
+    + collect_submodules("onnxruntime")
 )
 
 datas = (
