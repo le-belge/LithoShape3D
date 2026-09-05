@@ -108,12 +108,16 @@ PRESETS: dict[str, dict[str, float]] = {
     "Brouillon": {"resolution": 0.6, "min_thickness_mm": 1.0, "max_thickness_mm": 3.0},
     # Boitier tiers "Cadre Lithophane CMYK Bambu" (hugo.workshop, MakerWorld
     # #1036463) -- epaisseur max 3.2mm = jeu exact de la fente du cadre pour
-    # une litho mono. La largeur seule ne garantit pas 104mm de hauteur (la
-    # hauteur suit toujours le ratio de la photo, cf. _current_geometry_parameters) :
-    # cadrer la photo en 140:104 (~1.346:1) via Forme > Rectangle pour un
-    # ajustement exact au cadre.
+    # une litho mono. `height_mm` declenche un recadrage REEL guide (rognage
+    # effectif des pixels, voir _offer_crop_to_locked_aspect) : la hauteur
+    # calculee (toujours verrouillee au ratio de la photo, cf.
+    # _current_geometry_parameters) ne peut valoir 104mm que si la photo
+    # elle-meme est au ratio 140:104 -- un simple positionnement/zoom
+    # d'affichage (Cadrage classique) ne change jamais les dimensions du
+    # panneau.
     "LithoGift Bambu Mono (140x104mm)": {
-        "resolution": 0.2, "min_thickness_mm": 0.8, "max_thickness_mm": 3.2, "width_mm": 140.0,
+        "resolution": 0.2, "min_thickness_mm": 0.8, "max_thickness_mm": 3.2,
+        "width_mm": 140.0, "height_mm": 104.0,
     },
 }
 
@@ -274,6 +278,7 @@ class MainWindow(QMainWindow):
         self._zone_masks: dict[str, np.ndarray] = {}
 
         self._image_path: str | None = None
+        self._locked_aspect_mm: tuple[float, float] | None = None
         self._auto_background_color_image = None
         self._image_width_px = 0
         self._image_height_px = 0
@@ -489,6 +494,15 @@ class MainWindow(QMainWindow):
             self.preset_combo.addItem(name)
         self.preset_combo.currentTextChanged.connect(self._apply_preset)
         layout.addWidget(self.preset_combo)
+
+        self.crop_to_locked_aspect_button = QPushButton("Recadrer pour ce format...")
+        self.crop_to_locked_aspect_button.setToolTip(
+            "Rogne reellement la photo au ratio exact requis par ce preset -- "
+            "sans ca, la hauteur suit le ratio brut de la photo importee."
+        )
+        self.crop_to_locked_aspect_button.setVisible(False)
+        self.crop_to_locked_aspect_button.clicked.connect(self._offer_crop_to_locked_aspect)
+        layout.addWidget(self.crop_to_locked_aspect_button)
 
         relief_group = QGroupBox("Relief")
         relief_form = QFormLayout(relief_group)
@@ -1124,6 +1138,13 @@ class MainWindow(QMainWindow):
         self._update_height_display()
         self._set_state(AppState.IMAGE_LOADED)
 
+        if self._locked_aspect_mm is not None:
+            # Couvre le cas ou le preset a ete choisi AVANT de charger cette
+            # photo (ordre inverse) -- _offer_crop_to_locked_aspect() gere
+            # elle-meme le cas "deja au bon ratio" (evite de rouvrir le
+            # dialogue sur le fichier qu'elle vient tout juste de sauvegarder).
+            self._offer_crop_to_locked_aspect()
+
     def _update_height_display(self) -> None:
         if not self._image_path:
             self.height_display.setText("- mm")
@@ -1715,6 +1736,58 @@ class MainWindow(QMainWindow):
             if self._state is AppState.MESH_READY:
                 self._set_state(AppState.PARAMS_DIRTY)
 
+    def _offer_crop_to_locked_aspect(self) -> None:
+        """Recadrage REEL (rognage effectif des pixels, pas juste un
+        positionnement d'affichage) au ratio impose par un preset comme
+        "LithoGift Bambu Mono" -- seul moyen d'obtenir une hauteur calculee
+        exacte, puisque `_current_geometry_parameters` verrouille toujours
+        la hauteur au ratio de la photo BRUTE chargee (jamais modifie par le
+        Cadrage classique, voir _on_cadrage_clicked). Toujours interactif :
+        propose le meme outil glisser/zoomer que le Cadrage habituel, jamais
+        un rognage silencieux."""
+        if not self._image_path or self._locked_aspect_mm is None:
+            return
+        target_width_mm, target_height_mm = self._locked_aspect_mm
+        target_ratio = target_width_mm / target_height_mm
+        actual_ratio = self._image_width_px / self._image_height_px
+        if abs(actual_ratio - target_ratio) <= 0.01 * target_ratio:
+            return  # deja au bon ratio (notamment apres un recadrage precedent)
+
+        from lithoshape3d.core.image.transform import (
+            apply_image_transform,
+            fill_scale_relative_to_fit,
+        )
+        from lithoshape3d.ui.cadrage_dialog import CadrageDialog
+
+        px_per_mm = 1.0 / self.resolution_spin.value()
+        bake_cols = max(1, round(target_width_mm * px_per_mm))
+        bake_rows = max(1, round(target_height_mm * px_per_mm))
+
+        base_array = to_grayscale_array(load_image(self._image_path))
+        fill_scale = fill_scale_relative_to_fit(
+            base_array.shape[1], base_array.shape[0], bake_cols, bake_rows
+        )
+        initial_transform = ImageTransform(scale=fill_scale, fit_mode="fill")
+        shape_mask = np.ones((bake_rows, bake_cols), dtype=bool)
+
+        dialog = CadrageDialog(base_array, shape_mask, initial_transform, self)
+        dialog.setWindowTitle(f"Cadrer pour {target_width_mm:.0f}x{target_height_mm:.0f}mm")
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        cropped = apply_image_transform(
+            base_array, dialog.transform, bake_cols, bake_rows, fill_value=1.0
+        )
+        cropped_u8 = np.clip(cropped * 255.0, 0, 255).astype(np.uint8)
+        suffix = f"-{target_width_mm:.0f}x{target_height_mm:.0f}"
+        new_path = str(Path(self._image_path).with_stem(Path(self._image_path).stem + suffix))
+        Image.fromarray(cropped_u8, "L").save(new_path, "PNG")
+        self._load_image(new_path)
+        self.statusBar().showMessage(
+            f"Photo recadree a {target_width_mm:.0f}x{target_height_mm:.0f}mm : {Path(new_path).name}",
+            6000,
+        )
+
     def _on_zone_selection_changed(self) -> None:
         item = self.zones_list.currentItem()
         if item is None:
@@ -1916,6 +1989,14 @@ class MainWindow(QMainWindow):
         if "width_mm" in preset:
             self.width_spin.setValue(preset["width_mm"])
 
+        if "height_mm" in preset:
+            self._locked_aspect_mm = (preset["width_mm"], preset["height_mm"])
+        else:
+            self._locked_aspect_mm = None
+        self.crop_to_locked_aspect_button.setVisible(self._locked_aspect_mm is not None)
+        if self._locked_aspect_mm is not None and self._image_path:
+            self._offer_crop_to_locked_aspect()
+
     def _current_geometry_parameters(self) -> GeometryParameters:
         height_mm = height_mm_from_aspect_ratio(
             self.width_spin.value(), self._image_width_px, self._image_height_px
@@ -1938,6 +2019,8 @@ class MainWindow(QMainWindow):
         self.invert_checkbox.setChecked(False)
         self.contrast_spin.setValue(1.0)
         self.brightness_spin.setValue(0.0)
+        self._locked_aspect_mm = None
+        self.crop_to_locked_aspect_button.setVisible(False)
 
     # ------------------------------------------------------------------ #
     # Generation

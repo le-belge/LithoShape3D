@@ -1,7 +1,9 @@
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtWidgets import QDialog
 
 from lithoshape3d.ai.segmentation import MockSegmentationBackend
 from lithoshape3d.core.scene.models import ColorStrategy, CompositionMode, ReliefMode, ShapeType
@@ -547,3 +549,79 @@ def test_shape_to_backlight_creates_a_red_insert_zone_from_the_text_mask(main_wi
     # insert de zone, pas la silhouette globale du panneau.
     assert scene.shape.shape_type is ShapeType.RECTANGLE
     assert main_window.shape_type_combo.currentData() is ShapeType.RECTANGLE
+
+
+class _FakeCadrageDialog:
+    """Simule CadrageDialog : accepte immediatement avec le transform initial
+    recu, sans jamais afficher de vraie fenetre (tests headless)."""
+
+    def __init__(self, source_array, shape_mask, initial_transform, parent=None):
+        self.transform = initial_transform
+
+    def setWindowTitle(self, _title):
+        pass
+
+    def exec(self):
+        return QDialog.DialogCode.Accepted
+
+
+class _FakeCadrageDialogRejected(_FakeCadrageDialog):
+    def exec(self):
+        return QDialog.DialogCode.Rejected
+
+
+def test_lithogift_preset_sets_locked_aspect_and_shows_crop_button(main_window):
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    assert main_window._locked_aspect_mm == (140.0, 104.0)
+    assert not main_window.crop_to_locked_aspect_button.isHidden()
+
+
+def test_quality_preset_clears_locked_aspect(main_window):
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    main_window._apply_preset("Fin")
+
+    assert main_window._locked_aspect_mm is None
+    assert main_window.crop_to_locked_aspect_button.isHidden()
+
+
+def test_lithogift_preset_with_square_photo_triggers_real_crop_to_140x104(
+    main_window, tmp_path, monkeypatch
+):
+    from lithoshape3d.core.geometry.heightmap import height_mm_from_aspect_ratio
+
+    # Photo carree : ratio tres eloigne de 140:104 (~1.346:1), declenche a
+    # coup sur le recadrage (pas de zone grise pres de la tolerance 1%).
+    _load(main_window, tmp_path, width=200, height=200)
+    monkeypatch.setattr("lithoshape3d.ui.cadrage_dialog.CadrageDialog", _FakeCadrageDialog)
+
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    new_path = Path(main_window._image_path)
+    assert new_path.name.endswith("-140x104.png")
+    assert new_path.exists()
+    height_mm = height_mm_from_aspect_ratio(
+        140.0, main_window._image_width_px, main_window._image_height_px
+    )
+    assert height_mm == pytest.approx(104.0, abs=0.5)
+
+
+def test_lithogift_crop_cancelled_leaves_image_untouched(main_window, tmp_path, monkeypatch):
+    original_path = _load(main_window, tmp_path, width=200, height=200)
+    monkeypatch.setattr("lithoshape3d.ui.cadrage_dialog.CadrageDialog", _FakeCadrageDialogRejected)
+
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    assert main_window._image_path == str(original_path)
+
+
+def test_loading_a_different_photo_after_preset_retriggers_crop(main_window, tmp_path, monkeypatch):
+    monkeypatch.setattr("lithoshape3d.ui.cadrage_dialog.CadrageDialog", _FakeCadrageDialog)
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")  # sans image chargee
+    assert main_window._locked_aspect_mm == (140.0, 104.0)
+
+    _load(main_window, tmp_path, width=200, height=200)  # ordre inverse
+
+    new_path = Path(main_window._image_path)
+    assert new_path.name.endswith("-140x104.png")
