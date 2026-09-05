@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from lithoshape3d.ai.segmentation import MockSegmentationBackend
-from lithoshape3d.core.scene.models import CompositionMode, ReliefMode, ShapeType
+from lithoshape3d.core.scene.models import ColorStrategy, CompositionMode, ReliefMode, ShapeType
 from lithoshape3d.ui import main_window as main_window_module
 from lithoshape3d.ui.state import AppState
 from tests.fixtures.synthetic_images import make_gradient_image
@@ -496,3 +496,46 @@ def test_arrow_key_is_a_no_op_outside_text_shape(main_window):
     shape = main_window._project.scene.shape
     assert shape.offset_x == 0.0
     assert shape.offset_y == 0.0
+
+
+def test_shape_to_backlight_button_hidden_outside_text_shape(main_window):
+    _select_shape_type(main_window, ShapeType.TEXT)
+    assert not main_window.shape_to_backlight_button.isHidden()
+
+    _select_shape_type(main_window, ShapeType.RECTANGLE)
+    assert main_window.shape_to_backlight_button.isHidden()
+
+
+def test_shape_to_backlight_creates_a_red_insert_zone_from_the_text_mask(main_window, tmp_path):
+    import dataclasses
+
+    from lithoshape3d.core.geometry.heightmap import grid_dimensions
+    from lithoshape3d.core.geometry.shape import build_shape_mask
+
+    _load(main_window, tmp_path)
+    _select_shape_type(main_window, ShapeType.TEXT)
+    main_window.shape_text_edit.setText("HI")
+    main_window.shape_text_edit.editingFinished.emit()
+    zones_before = len(main_window._project.scene.zones)
+    text_shape_before = dataclasses.replace(main_window._project.scene.shape)
+    geometry_before = main_window._current_geometry_parameters()
+
+    main_window._on_shape_to_backlight_clicked()
+
+    scene = main_window._project.scene
+    assert len(scene.zones) == zones_before + 1
+    new_zone = scene.zones[-1]
+    assert new_zone.color_strategy is ColorStrategy.BACKLIGHT_INSERT
+    assert new_zone.material.color == (1.0, 0.0, 0.0)
+    assert scene.active_zone_id == new_zone.id
+
+    mask = main_window._zone_masks[new_zone.id]
+    assert mask.any()
+    rows, cols = grid_dimensions(geometry_before)
+    expected = build_shape_mask(text_shape_before, rows, cols).astype(np.float32)
+    np.testing.assert_array_equal(mask, expected)
+
+    # La Forme redevient un rectangle normal : le texte est maintenant un
+    # insert de zone, pas la silhouette globale du panneau.
+    assert scene.shape.shape_type is ShapeType.RECTANGLE
+    assert main_window.shape_type_combo.currentData() is ShapeType.RECTANGLE

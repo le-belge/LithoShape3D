@@ -80,6 +80,7 @@ from lithoshape3d.core.scene.models import (
     CompositionMode,
     GeometryParameters,
     ImageTransform,
+    Material,
     Project,
     ReliefMode,
     ShapeType,
@@ -707,6 +708,14 @@ class MainWindow(QMainWindow):
         self.cadrage_button = QPushButton("Cadrer la photo...")
         self.cadrage_button.clicked.connect(self._on_cadrage_clicked)
         shape_layout.addWidget(self.cadrage_button)
+
+        self.shape_to_backlight_button = QPushButton("Envoyer vers une zone Backlight...")
+        self.shape_to_backlight_button.setToolTip(
+            "Cree une nouvelle zone Insert retro-eclaire a partir du texte positionne "
+            "(couleur rouge par defaut, modifiable) -- la Forme redevient un rectangle."
+        )
+        self.shape_to_backlight_button.clicked.connect(self._on_shape_to_backlight_clicked)
+        shape_layout.addWidget(self.shape_to_backlight_button)
 
         layout.addWidget(shape_group)
 
@@ -1532,6 +1541,7 @@ class MainWindow(QMainWindow):
         self.shape_offset_x_spin.setVisible(is_text)
         self.shape_offset_y_spin.setVisible(is_text)
         self.shape_offset_hint_label.setVisible(is_text)
+        self.shape_to_backlight_button.setVisible(is_text)
         self.shape_import_button.setVisible(is_import)
         self.shape_source_label.setVisible(is_import)
 
@@ -1585,6 +1595,42 @@ class MainWindow(QMainWindow):
         self._update_source_preview()
         self._current_material_meshes = None
         self._current_backlight_result = None
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+
+    def _on_shape_to_backlight_clicked(self) -> None:
+        """Cree une nouvelle Zone "Insert retro-eclaire" a partir du texte
+        positionne (Shape Composer) : les deux systemes sont independants
+        (voir docstring de core/geometry/shape.py), ce bouton est le seul
+        pont entre eux. La Forme redevient RECTANGLE ensuite -- le texte
+        devient un insert dans un panneau normal, pas la silhouette globale."""
+        if not self._image_path:
+            return
+        shape = self._project.scene.shape
+
+        new_zone = Zone(
+            name=f'Texte "{shape.text}"' if shape.text else "Texte",
+            geometry_params=self._current_geometry_parameters(),
+            color_strategy=ColorStrategy.BACKLIGHT_INSERT,
+            material=Material(name="Backlight rouge", color=(1.0, 0.0, 0.0)),
+        )
+        rows, cols = grid_dimensions(new_zone.geometry_params)
+        mask = build_shape_mask(shape, rows, cols).astype(np.float32)
+
+        self._project.scene.zones.append(new_zone)
+        self._zone_masks[new_zone.id] = mask
+        self._project.scene.active_zone_id = new_zone.id
+
+        shape.shape_type = ShapeType.RECTANGLE
+        self.shape_type_combo.blockSignals(True)
+        self._set_combo_data(self.shape_type_combo, shape.shape_type)
+        self.shape_type_combo.blockSignals(False)
+        self._update_shape_visibility()
+
+        self._refresh_zones_list()
+        self._current_material_meshes = None
+        self._current_backlight_result = None
+        self._update_source_preview()
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 
