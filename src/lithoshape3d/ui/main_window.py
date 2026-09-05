@@ -1130,6 +1130,19 @@ class MainWindow(QMainWindow):
         self._current_mesh = None
         self._project.scene.source_image_path = path
 
+        # "Hauteur (ratio verrouille)" est un invariant impose a TOUTES les
+        # zones (pas seulement la zone active) : si on ne resynchronise pas
+        # ici, une zone dont le geometry_params a ete fige AVANT ce chargement
+        # (ex. cree pendant qu'une autre zone etait active, cf.
+        # _on_param_changed qui n'ecrit que sur la zone active) garde une
+        # hauteur perimee -- invisible dans le panneau (qui, lui, recalcule
+        # toujours en direct depuis les spinboxes) mais utilisee telle quelle
+        # par la composition si cette zone sert de fondation (BASE).
+        for zone in self._project.scene.zones:
+            zone.geometry_params.height_mm = height_mm_from_aspect_ratio(
+                zone.geometry_params.width_mm, width_px, height_px
+            )
+
         self.filename_label.setText(Path(path).name)
         self.dimensions_label.setText(f"{width_px} x {height_px} px")
 

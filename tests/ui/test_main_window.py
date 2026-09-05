@@ -625,3 +625,55 @@ def test_loading_a_different_photo_after_preset_retriggers_crop(main_window, tmp
 
     new_path = Path(main_window._image_path)
     assert new_path.name.endswith("-140x104.png")
+
+
+def test_crop_to_locked_aspect_updates_the_zone_geometry_height_not_just_the_display(
+    main_window, tmp_path, monkeypatch
+):
+    """Reproduit le bug terrain : apres le recadrage, le panneau Geometrie
+    affichait bien 140x104mm (recalcule en direct depuis les spinboxes +
+    `_image_width_px/_image_height_px`), mais `Zone.geometry_params.height_mm`
+    -- la valeur reellement utilisee par la composition/generation -- restait
+    figee sur l'ancienne hauteur (celle de la photo carree d'avant recadrage),
+    puisque recharger une nouvelle image ne declenche aucun `valueChanged` sur
+    `width_spin` (valeur deja a 140) et donc jamais `_on_param_changed`."""
+    _load(main_window, tmp_path, width=200, height=200)
+    monkeypatch.setattr("lithoshape3d.ui.cadrage_dialog.CadrageDialog", _FakeCadrageDialog)
+
+    main_window._apply_preset("LithoGift Bambu Mono (140x104mm)")
+
+    zone = main_window._active_zone()
+    assert zone.geometry_params.width_mm == pytest.approx(140.0)
+    assert zone.geometry_params.height_mm == pytest.approx(104.0, abs=0.5)
+
+
+def test_loading_an_image_resyncs_height_on_every_zone_not_just_the_active_one(
+    main_window, tmp_path
+):
+    """Meme invariant ("hauteur toujours verrouillee au ratio de la photo")
+    mais isole du flux preset/crop : une zone non-active (ex. cree pendant
+    qu'une autre zone etait selectionnee, comme 'Envoyer vers une zone
+    Backlight...') ne doit pas non plus garder une `height_mm` perimee des
+    qu'une nouvelle photo est chargee -- `_on_param_changed` n'ecrit que sur
+    la zone active, donc seul `_load_image` peut garantir cet invariant pour
+    toutes les zones."""
+    from lithoshape3d.core.scene.models import Zone
+
+    _load(main_window, tmp_path, width=100, height=100)
+    base_zone = main_window._active_zone()
+
+    other_zone = Zone(name="Texte LOVE", geometry_params=main_window._current_geometry_parameters())
+    main_window._project.scene.zones.append(other_zone)
+    main_window._project.scene.active_zone_id = other_zone.id
+
+    landscape_path = make_gradient_image(tmp_path / "landscape.png", width=700, height=520)
+    main_window._load_image(str(landscape_path))
+
+    from lithoshape3d.core.geometry.heightmap import height_mm_from_aspect_ratio
+
+    assert base_zone.geometry_params.height_mm == pytest.approx(
+        height_mm_from_aspect_ratio(base_zone.geometry_params.width_mm, 700, 520), abs=1e-6
+    )
+    assert other_zone.geometry_params.height_mm == pytest.approx(
+        height_mm_from_aspect_ratio(other_zone.geometry_params.width_mm, 700, 520), abs=1e-6
+    )
