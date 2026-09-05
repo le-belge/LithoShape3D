@@ -671,6 +671,14 @@ class MainWindow(QMainWindow):
         self.shape_border_spin.valueChanged.connect(self._on_shape_changed)
         shape_form.addRow("Bordure", self.shape_border_spin)
 
+        self.shape_scale_spin = QDoubleSpinBox()
+        self.shape_scale_spin.setRange(10.0, 300.0)
+        self.shape_scale_spin.setSingleStep(5.0)
+        self.shape_scale_spin.setSuffix(" %")
+        self.shape_scale_spin.setValue(100.0)
+        self.shape_scale_spin.valueChanged.connect(self._on_shape_changed)
+        shape_form.addRow("Taille", self.shape_scale_spin)
+
         self.shape_offset_x_spin = QDoubleSpinBox()
         self.shape_offset_x_spin.setRange(-50.0, 50.0)
         self.shape_offset_x_spin.setSingleStep(1.0)
@@ -1505,6 +1513,7 @@ class MainWindow(QMainWindow):
             self.shape_text_edit,
             self.shape_bold_checkbox,
             self.shape_border_spin,
+            self.shape_scale_spin,
             self.shape_offset_x_spin,
             self.shape_offset_y_spin,
         ):
@@ -1513,6 +1522,7 @@ class MainWindow(QMainWindow):
         self.shape_text_edit.setText(shape.text)
         self.shape_bold_checkbox.setChecked(shape.bold)
         self.shape_border_spin.setValue(shape.border_width_mm)
+        self.shape_scale_spin.setValue(shape.scale * 100.0)
         self.shape_offset_x_spin.setValue(shape.offset_x * 100.0)
         self.shape_offset_y_spin.setValue(shape.offset_y * 100.0)
         for widget in (
@@ -1520,6 +1530,7 @@ class MainWindow(QMainWindow):
             self.shape_text_edit,
             self.shape_bold_checkbox,
             self.shape_border_spin,
+            self.shape_scale_spin,
             self.shape_offset_x_spin,
             self.shape_offset_y_spin,
         ):
@@ -1538,6 +1549,7 @@ class MainWindow(QMainWindow):
         is_import = shape_type in (ShapeType.SVG, ShapeType.IMAGE)
         self.shape_text_edit.setVisible(is_text)
         self.shape_bold_checkbox.setVisible(is_text)
+        self.shape_scale_spin.setVisible(is_text)
         self.shape_offset_x_spin.setVisible(is_text)
         self.shape_offset_y_spin.setVisible(is_text)
         self.shape_offset_hint_label.setVisible(is_text)
@@ -1564,6 +1576,7 @@ class MainWindow(QMainWindow):
         shape.text = self.shape_text_edit.text()
         shape.bold = self.shape_bold_checkbox.isChecked()
         shape.border_width_mm = self.shape_border_spin.value()
+        shape.scale = self.shape_scale_spin.value() / 100.0
         shape.offset_x = self.shape_offset_x_spin.value() / 100.0
         shape.offset_y = self.shape_offset_y_spin.value() / 100.0
         self._update_shape_visibility()
@@ -1619,13 +1632,25 @@ class MainWindow(QMainWindow):
 
         self._project.scene.zones.append(new_zone)
         self._zone_masks[new_zone.id] = mask
-        self._project.scene.active_zone_id = new_zone.id
+        # NE PAS toucher active_zone_id : le mode d'apercu par defaut est
+        # "Zone active" (view_zone_button.setChecked(True) a la construction),
+        # qui genere UNIQUEMENT la zone active en cliquant "Generer" -- y
+        # placer la nouvelle zone Backlight faisait disparaitre la lithophanie
+        # (regression constatee : "Generer" ne montrait plus que le texte en
+        # relief brut, sans le panneau photo ni la distinction insert/corps
+        # blanc). La zone d'origine (Lithophanie) reste active et selectionnee.
 
         shape.shape_type = ShapeType.RECTANGLE
         self.shape_type_combo.blockSignals(True)
         self._set_combo_data(self.shape_type_combo, shape.shape_type)
         self.shape_type_combo.blockSignals(False)
         self._update_shape_visibility()
+
+        # Bascule sur le mode "Composition" : c'est le seul mode qui compose
+        # reellement panneau + insert Backlight (voir _on_generate_clicked) --
+        # sans ca, "Generer" resterait en mode "Zone active" par defaut et ne
+        # montrerait jamais le resultat attendu par ce bouton.
+        self.view_composition_button.setChecked(True)
 
         self._refresh_zones_list()
         self._current_material_meshes = None

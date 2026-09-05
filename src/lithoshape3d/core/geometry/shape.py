@@ -106,10 +106,12 @@ def _text_mask(
     bold: bool,
     offset_x: float = 0.0,
     offset_y: float = 0.0,
+    size_scale: float = 1.0,
 ) -> np.ndarray:
     """Rendu texte via Pillow (pas Qt : reste testable/headless, respecte la
     frontiere core/ sans Qt). Le texte est mis a l'echelle pour occuper au
-    mieux la grille tout en preservant son ratio naturel."""
+    mieux la grille tout en preservant son ratio naturel, puis `size_scale`
+    (ShapeParams.scale) est applique en plus (1.0 = taille par defaut)."""
     if not text.strip():
         return np.zeros((rows, cols), dtype=bool)
 
@@ -126,7 +128,7 @@ def _text_mask(
     bbox = font.getbbox(text, stroke_width=2 if bold else 0)
     text_w, text_h = max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
     margin = 0.9
-    scale = min(cols * margin / text_w, rows * margin / text_h)
+    scale = min(cols * margin / text_w, rows * margin / text_h) * size_scale
     font_size = max(4, int(probe_size * scale))
     font = ImageFont.truetype(resolved_font_path, font_size)
     bbox = font.getbbox(text, stroke_width=2 if bold else 0)
@@ -159,7 +161,14 @@ _BUILTIN_BUILDERS = {
     ShapeType.HEART: lambda rows, cols, params: _heart_mask(rows, cols),
     ShapeType.STAR: lambda rows, cols, params: _star_mask(rows, cols),
     ShapeType.TEXT: lambda rows, cols, params: _text_mask(
-        rows, cols, params.text, params.font_path, params.bold, params.offset_x, params.offset_y
+        rows,
+        cols,
+        params.text,
+        params.font_path,
+        params.bold,
+        params.offset_x,
+        params.offset_y,
+        params.scale,
     ),
 }
 

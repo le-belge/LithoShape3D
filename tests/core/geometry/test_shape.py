@@ -109,6 +109,24 @@ def test_text_shape_offset_y_moves_the_mask_vertically():
     assert cx1 == pytest.approx(cx0, abs=1.0)
 
 
+def test_text_shape_scale_grows_the_mask_area():
+    default_size = build_shape_mask(ShapeParams(shape_type=ShapeType.TEXT, text="M"), ROWS, COLS)
+    smaller = build_shape_mask(
+        ShapeParams(shape_type=ShapeType.TEXT, text="M", scale=0.5), ROWS, COLS
+    )
+
+    assert smaller.sum() < default_size.sum()
+
+
+def test_text_shape_scale_default_matches_unset_scale():
+    default_shape = build_shape_mask(ShapeParams(shape_type=ShapeType.TEXT, text="M"), ROWS, COLS)
+    explicit_100 = build_shape_mask(
+        ShapeParams(shape_type=ShapeType.TEXT, text="M", scale=1.0), ROWS, COLS
+    )
+
+    np.testing.assert_array_equal(default_shape, explicit_100)
+
+
 def test_build_shape_mask_rejects_image_and_svg_without_prior_loading():
     with pytest.raises(ValueError):
         build_shape_mask(ShapeParams(shape_type=ShapeType.IMAGE, source_image_path="x.png"), ROWS, COLS)

@@ -517,6 +517,7 @@ def test_shape_to_backlight_creates_a_red_insert_zone_from_the_text_mask(main_wi
     main_window.shape_text_edit.setText("HI")
     main_window.shape_text_edit.editingFinished.emit()
     zones_before = len(main_window._project.scene.zones)
+    active_zone_id_before = main_window._project.scene.active_zone_id
     text_shape_before = dataclasses.replace(main_window._project.scene.shape)
     geometry_before = main_window._current_geometry_parameters()
 
@@ -527,7 +528,14 @@ def test_shape_to_backlight_creates_a_red_insert_zone_from_the_text_mask(main_wi
     new_zone = scene.zones[-1]
     assert new_zone.color_strategy is ColorStrategy.BACKLIGHT_INSERT
     assert new_zone.material.color == (1.0, 0.0, 0.0)
-    assert scene.active_zone_id == new_zone.id
+    # La zone active ne doit PAS basculer sur la nouvelle zone : sinon un
+    # simple clic sur "Generer" en mode "Zone active" (coche par defaut) ne
+    # produirait plus que cette zone isolee, faisant "disparaitre" la
+    # lithophanie de base (regression constatee et corrigee).
+    assert scene.active_zone_id == active_zone_id_before
+    # Le mode "Composition" doit etre active : c'est le seul qui compose
+    # reellement panneau + insert Backlight.
+    assert main_window.view_composition_button.isChecked()
 
     mask = main_window._zone_masks[new_zone.id]
     assert mask.any()

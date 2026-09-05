@@ -236,6 +236,11 @@ class ShapeParams:
     Scene (meme convention que ImageTransform.offset_x/y) -- non borne, la
     forme peut sortir du cadre. Utilise uniquement par TEXT aujourd'hui (voir
     core/geometry/shape.py:_text_mask)."""
+    scale: float = 1.0
+    """Multiplicateur applique a la taille du texte apres ajustement
+    automatique a la grille (1.0 = taille par defaut, ex. 1.5 = +50%).
+    Utilise uniquement par TEXT aujourd'hui (voir
+    core/geometry/shape.py:_text_mask)."""
 
 
 @dataclass
