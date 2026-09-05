@@ -1,8 +1,13 @@
 """Backlight Insert (v0.4.1) : la lithophanie principale reste blanche, avec
 une fine peau conservee en facade ; un insert colore independant, plat, vient
 se loger derriere cette peau, dans une cavite creusee au dos du corps blanc --
-sans jamais modifier la surface avant deja composee (meme garantie que
-`ColorStrategy.MATERIAL_ONLY`, voir composition.py).
+sans modifier la surface avant deja composee (meme garantie que
+`ColorStrategy.MATERIAL_ONLY`, voir composition.py), SAUF exception locale et
+deliberee : la ou la photo est trop fine sous une zone Backlight Insert pour
+loger peau+insert, `z_final` y est releve au strict minimum requis (jamais
+ailleurs) plutot que d'exclure ces points -- garantit un insert/texte toujours
+entier, sans trou, au prix d'une tres legere sur-epaisseur locale confinee au
+contour de la zone (voir le detail dans `compose_backlight_bodies`).
 
 Reutilise l'ensemble du moteur existant plutot qu'un second moteur
 geometrique parallele : `compose_scene_heightfield` pour la surface avant
@@ -282,28 +287,39 @@ def compose_backlight_bodies(
         skin = max(params.white_skin_thickness_mm, 0.0)
         insert_thickness = max(params.insert_thickness_mm, 0.0)
 
-        # Garantie geometrique (hotfix v0.4.2) : l'insert est un pave UNIFORME
-        # pose contre le dos (Z=[0, insert_thickness_mm]), independant de la
-        # profondeur de cavite locale. La ou la lithophanie est localement
-        # trop fine pour loger a la fois la peau demandee ET l'insert
-        # (z_final < skin + insert_thickness), creuser quand meme la cavite
-        # ferait deborder l'insert DANS le corps blanc solide -- collision
-        # silencieuse entre les deux corps, visible en facade (trou/insert
-        # traversant). On exclut ces points de la cavite ET de l'empreinte de
-        # l'insert : la facade y reste pleine epaisseur (pas de coloration
-        # backlight a ces points precis), jamais un trou. Toujours signale,
-        # jamais silencieux (mission hotfix 0.4.2, section 9).
+        # Garantie geometrique (hotfix v0.4.2, revise -- retour terrain texte
+        # Backlight sur photo a luminosite variable) : l'insert est un pave
+        # UNIFORME pose contre le dos (Z=[0, insert_thickness_mm]),
+        # independant de la profondeur de cavite locale. La ou la lithophanie
+        # est localement trop fine pour loger a la fois la peau demandee ET
+        # l'insert (z_final < skin + insert_thickness), on ne peut PAS
+        # creuser la cavite a pleine profondeur sans faire deborder l'insert
+        # DANS le corps blanc solide (collision, trou visible en facade).
+        #
+        # Plutot que d'exclure ces points (ancien comportement : la facade y
+        # restait pleine epaisseur, mais des lettres/formes d'insert
+        # devenaient partiellement absentes des qu'elles chevauchaient une
+        # zone claire/fine de la photo), on RELEVE localement `z_final` au
+        # minimum requis, exactement sous l'empreinte de cette zone. Deroge
+        # deliberement a l'invariant "la composition Backlight ne modifie
+        # jamais la surface avant deja composee" (voir docstring de module),
+        # mais uniquement ici, uniquement sous ce masque de zone precis,
+        # jamais ailleurs sur la photo -- decision produit : un insert/texte
+        # doit toujours etre entier et sans trou, quitte a une tres legere
+        # sur-epaisseur locale invisible a l'oeil. Toujours signale, jamais
+        # silencieux (mission hotfix 0.4.2, section 9).
         required_total = skin + insert_thickness
-        feasible = zone_active & (z_final >= required_total)
-        infeasible = zone_active & ~feasible
-        if infeasible.any():
-            worst_shortfall = float((required_total - z_final[infeasible]).max())
+        shortfall = zone_active & (z_final < required_total)
+        if shortfall.any():
+            max_raise = float((required_total - z_final[shortfall]).max())
+            z_final[shortfall] = required_total
             warnings.append(
-                f"Zone '{zone.name}' : {int(infeasible.sum())} point(s) trop fins pour loger "
-                f"a la fois la peau ({skin:.2f}mm) et l'insert ({insert_thickness:.2f}mm) -- "
-                f"jusqu'a {worst_shortfall:.3f}mm d'epaisseur locale manquante. Aucune cavite "
-                f"creusee a ces points (facade pleine epaisseur preservee, insert absent localement)."
+                f"Zone '{zone.name}' : epaisseur locale relevee jusqu'a {max_raise:.3f}mm "
+                f"sur {int(shortfall.sum())} point(s) pour garantir la peau ({skin:.2f}mm) "
+                f"et l'insert ({insert_thickness:.2f}mm) sans trou -- limite au contour de "
+                "cette zone, jamais au reste de la photo."
             )
+        feasible = zone_active  # garanti par l'elevation ci-dessus
         if not feasible.any():
             continue
 

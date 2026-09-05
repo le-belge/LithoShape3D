@@ -248,14 +248,15 @@ def _compose_and_capture_heightfields(sources):
     return result, white_call["front_z"], white_call["back_z"], white_call["active"]
 
 
-def test_backlight_thin_region_gets_no_cavity_instead_of_collision(tmp_path):
-    """Hotfix 0.4.2 -- reproduit le bug mesure sur la demo femme+rose : la ou
-    la lithophanie locale est trop fine pour loger a la fois la peau ET
-    l'insert (z_final < skin + insert_thickness), l'ancien code creusait
-    quand meme la cavite pleine profondeur, faisant deborder l'insert
-    (pave uniforme Z=[0, insert_thickness]) DANS le corps blanc solide --
-    collision silencieuse. Doit maintenant : ne creuser AUCUNE cavite a ces
-    points (facade pleine epaisseur, pas de trou) et le signaler."""
+def test_backlight_thin_region_gets_elevated_instead_of_excluded(tmp_path):
+    """Retour terrain (texte Backlight sur photo a luminosite variable) :
+    la ou la lithophanie locale est trop fine pour loger a la fois la peau
+    ET l'insert (z_final < skin + insert_thickness), l'ancien comportement
+    (hotfix 0.4.2 initial) excluait ces points de la cavite -- des
+    lettres/formes d'insert devenaient partiellement absentes des qu'elles
+    chevauchaient une zone claire/fine de la photo. Doit maintenant : relever
+    localement `z_final` au minimum requis (jamais ailleurs), pour garantir
+    une cavite ET un insert continus sur TOUTE l'empreinte de la zone."""
     _yy, xx = np.mgrid[0:ROWS, 0:COLS]
     # degrade lineaire en X : colonnes basses = fin (proche du plancher),
     # colonnes hautes = epais -- une partie de la zone Backlight sera donc
@@ -273,38 +274,48 @@ def test_backlight_thin_region_gets_no_cavity_instead_of_collision(tmp_path):
         ZoneSource(zone=base, image_path=str(image_path)),
         ZoneSource(zone=rose, image_path=str(image_path), mask=_rose_mask()),
     ]
+    required_total = 0.4 + 0.6
+
+    # Reference : la hauteur AVANT tout traitement Backlight (base seule),
+    # pour distinguer les points originellement trop fins de ceux deja
+    # assez epais -- `front_z` capture plus bas est deja post-elevation.
+    baseline_z, baseline_active, _w, _h = compose_scene_heightfield(
+        [ZoneSource(zone=base, image_path=str(image_path))]
+    )
 
     result, front_z, back_z, active = _compose_and_capture_heightfields(sources)
 
     assert result.warnings != []
-    assert any("trop fins" in w for w in result.warnings)
+    assert any("epaisseur locale relevee" in w for w in result.warnings)
+    assert not any("trop fins" in w for w in result.warnings)
 
     # `_rose_mask()` est en orientation image (Y-down) ; `front_z`/`back_z`/
-    # `active` captures sont deja dans l'orientation canonique Y-up utilisee
-    # en interne (cf. le flip dans `_effective_zone_active`) -- reproduire
-    # le meme flip ici pour comparer les memes cellules.
+    # `active`/`baseline_z` sont deja dans l'orientation canonique Y-up
+    # utilisee en interne (cf. le flip dans `_effective_zone_active`).
     zone_mask = np.flipud(_rose_mask()).astype(bool) & active
-    thin_points = zone_mask & (front_z < 1.0)
-    thick_points = zone_mask & (front_z >= 1.0)
+    thin_points = zone_mask & (baseline_z < required_total)
+    thick_points = zone_mask & (baseline_z >= required_total)
     assert thin_points.any() and thick_points.any(), "le degrade doit couvrir les deux cas dans le test"
 
-    # points trop fins : AUCUNE cavite creusee (back_z reste au defaut = 0,
-    # facade pleine epaisseur -- jamais de trou).
-    assert np.all(back_z[thin_points] == 0.0)
+    # Points originellement trop fins : la facade (front_z) est relevee
+    # EXACTEMENT au minimum requis, jamais plus.
+    assert np.allclose(front_z[thin_points], required_total, atol=1e-4)
+    # Points deja assez epais : la facade reste rigoureusement inchangee.
+    assert np.allclose(front_z[thick_points], baseline_z[thick_points], atol=1e-6)
+    # Hors de la zone Backlight, la facade est intacte partout.
+    outside_zone = active & ~zone_mask
+    assert np.allclose(front_z[outside_zone], baseline_z[outside_zone], atol=1e-6)
 
-    # points assez epais : cavite creusee, ET l'insert (0.6mm) tient
-    # entierement dans la profondeur disponible (l'invariant que l'ancien
-    # code ne verifiait pas).
-    assert np.all(back_z[thick_points] > 0.0)
-    assert np.all(back_z[thick_points] >= 0.6 - 1e-6)
+    # Cavite creusee sur TOUTE l'empreinte de la zone desormais, y compris
+    # les points auparavant trop fins -- plus aucune exclusion.
+    assert np.all(back_z[zone_mask] > 0.0)
+    assert np.all(back_z[zone_mask] >= 0.6 - 1e-6)
 
-    # l'empreinte de l'insert doit exclure la region trop fine (rester a
-    # gauche du debut de la zone trop fine, avec une petite marge pour
-    # l'arrondi resolution/erosion XY).
+    # L'insert couvre desormais l'integralite de la zone (plus tronque a la
+    # region "assez epaisse").
     insert_mesh = result.insert_meshes["Rose"]
-    thin_xs_mm = np.where(thin_points.any(axis=0))[0] * (WIDTH_MM / COLS)
-    if thin_xs_mm.size:
-        assert insert_mesh.bounds[1][0] <= thin_xs_mm.min() + 1.0
+    zone_xs_mm = np.where(zone_mask.any(axis=0))[0] * (WIDTH_MM / COLS)
+    assert insert_mesh.bounds[1][0] >= zone_xs_mm.max() - 1.0
 
     assert validate_mesh(result.white_mesh).is_valid
     assert validate_mesh(insert_mesh).is_valid
