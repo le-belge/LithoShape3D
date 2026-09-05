@@ -98,7 +98,15 @@ def _fallback_font_path() -> str | None:
     return None
 
 
-def _text_mask(rows: int, cols: int, text: str, font_path: str | None, bold: bool) -> np.ndarray:
+def _text_mask(
+    rows: int,
+    cols: int,
+    text: str,
+    font_path: str | None,
+    bold: bool,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+) -> np.ndarray:
     """Rendu texte via Pillow (pas Qt : reste testable/headless, respecte la
     frontiere core/ sans Qt). Le texte est mis a l'echelle pour occuper au
     mieux la grille tout en preservant son ratio naturel."""
@@ -126,7 +134,10 @@ def _text_mask(rows: int, cols: int, text: str, font_path: str | None, bold: boo
 
     image = Image.new("L", (cols, rows), 0)
     draw = ImageDraw.Draw(image)
-    origin = ((cols - text_w) / 2 - bbox[0], (rows - text_h) / 2 - bbox[1])
+    origin = (
+        (cols - text_w) / 2 - bbox[0] + offset_x * cols,
+        (rows - text_h) / 2 - bbox[1] + offset_y * rows,
+    )
     draw.text(origin, text, fill=255, font=font, stroke_width=2 if bold else 0, stroke_fill=255)
     return np.asarray(image, dtype=np.float32) / 255.0 >= 0.5
 
@@ -147,7 +158,9 @@ _BUILTIN_BUILDERS = {
     ShapeType.OVAL: lambda rows, cols, params: _oval_mask(rows, cols),
     ShapeType.HEART: lambda rows, cols, params: _heart_mask(rows, cols),
     ShapeType.STAR: lambda rows, cols, params: _star_mask(rows, cols),
-    ShapeType.TEXT: lambda rows, cols, params: _text_mask(rows, cols, params.text, params.font_path, params.bold),
+    ShapeType.TEXT: lambda rows, cols, params: _text_mask(
+        rows, cols, params.text, params.font_path, params.bold, params.offset_x, params.offset_y
+    ),
 }
 
 

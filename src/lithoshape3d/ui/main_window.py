@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 from PIL import Image
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, Signal
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -127,6 +127,11 @@ _STATE_MESSAGES = {
 
 _STALE_BANNER_TEXT = "Apercu a regenerer"
 
+_OUTSIDE_SHAPE_DARKEN_FACTOR = 0.25
+"""Meme valeur que ui/cadrage_dialog.py:_OUTSIDE_DARKEN_FACTOR -- assombrit
+l'exterieur de la forme (TEXTE, etc.) dans l'apercu source pour visualiser
+son positionnement sans generer le mesh complet."""
+
 
 def _create_segmentation_backend():
     """None uniquement si la dependance IA (coremltools) est absente. Si
@@ -150,11 +155,34 @@ def _array_to_pixmap(array: np.ndarray) -> QPixmap:
 
 class AspectRatioImageLabel(QLabel):
     """QLabel qui reescalonne son pixmap source au resize, sans jamais
-    recalculer l'image (`set_source_pixmap` seul fait le travail couteux)."""
+    recalculer l'image (`set_source_pixmap` seul fait le travail couteux).
+
+    Emet aussi `arrow_pressed(dx, dy)` sur les fleches du clavier une fois
+    le label focus (clic dessus) -- ce widget reste generique (aucune
+    connaissance de "forme"/"texte"), c'est l'appelant qui interprete le
+    signal (voir MainWindow._on_preview_arrow_key)."""
+
+    arrow_pressed = Signal(int, int)  # dx, dy en unites de pas (-1, 0, 1)
+
+    _ARROW_DELTAS = {
+        Qt.Key.Key_Left: (-1, 0),
+        Qt.Key.Key_Right: (1, 0),
+        Qt.Key.Key_Up: (0, -1),
+        Qt.Key.Key_Down: (0, 1),
+    }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._source_pixmap: QPixmap | None = None
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def keyPressEvent(self, event) -> None:
+        delta = self._ARROW_DELTAS.get(event.key())
+        if delta is None:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+        self.arrow_pressed.emit(*delta)
 
     def set_source_pixmap(self, pixmap: QPixmap) -> None:
         self._source_pixmap = pixmap
@@ -380,6 +408,7 @@ class MainWindow(QMainWindow):
         self.preview_label.setObjectName("previewLabel")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(200, 200)
+        self.preview_label.arrow_pressed.connect(self._on_preview_arrow_key)
         layout.addWidget(self.preview_label, 1)
 
         self.zoom_preview_button = QPushButton("Zoom apercu...")
@@ -640,6 +669,26 @@ class MainWindow(QMainWindow):
         self.shape_border_spin.setSuffix(" mm")
         self.shape_border_spin.valueChanged.connect(self._on_shape_changed)
         shape_form.addRow("Bordure", self.shape_border_spin)
+
+        self.shape_offset_x_spin = QDoubleSpinBox()
+        self.shape_offset_x_spin.setRange(-50.0, 50.0)
+        self.shape_offset_x_spin.setSingleStep(1.0)
+        self.shape_offset_x_spin.setSuffix(" %")
+        self.shape_offset_x_spin.valueChanged.connect(self._on_shape_changed)
+        shape_form.addRow("Position X", self.shape_offset_x_spin)
+
+        self.shape_offset_y_spin = QDoubleSpinBox()
+        self.shape_offset_y_spin.setRange(-50.0, 50.0)
+        self.shape_offset_y_spin.setSingleStep(1.0)
+        self.shape_offset_y_spin.setSuffix(" %")
+        self.shape_offset_y_spin.valueChanged.connect(self._on_shape_changed)
+        shape_form.addRow("Position Y", self.shape_offset_y_spin)
+
+        self.shape_offset_hint_label = QLabel(
+            "Astuce : cliquez sur l'apercu photo puis utilisez les fleches du clavier."
+        )
+        self.shape_offset_hint_label.setWordWrap(True)
+        shape_form.addRow("", self.shape_offset_hint_label)
 
         shape_layout.addLayout(shape_form)
 
@@ -1087,6 +1136,17 @@ class MainWindow(QMainWindow):
         if self.invert_checkbox.isChecked():
             array = 1.0 - array
 
+        shape_mask = self._current_shape_mask()
+        if shape_mask is not None:
+            if shape_mask.shape != array.shape:
+                shape_mask = resize_array(
+                    shape_mask.astype(np.float32), width_px=array.shape[1], height_px=array.shape[0]
+                ) >= 0.5
+            # Meme technique que ui/cadrage_dialog.py:_CadragePreviewWidget._refresh
+            # (assombrir l'exterieur de la forme) -- feedback visuel immediat pour
+            # positionner la forme TEXTE sans generer le mesh complet.
+            array = np.where(shape_mask, array, array * _OUTSIDE_SHAPE_DARKEN_FACTOR)
+
         zone = self._active_zone()
         if zone is not None:
             mask_preview = self._zone_mask_at_shape(zone, array.shape)
@@ -1436,17 +1496,23 @@ class MainWindow(QMainWindow):
             self.shape_text_edit,
             self.shape_bold_checkbox,
             self.shape_border_spin,
+            self.shape_offset_x_spin,
+            self.shape_offset_y_spin,
         ):
             widget.blockSignals(True)
         self._set_combo_data(self.shape_type_combo, shape.shape_type)
         self.shape_text_edit.setText(shape.text)
         self.shape_bold_checkbox.setChecked(shape.bold)
         self.shape_border_spin.setValue(shape.border_width_mm)
+        self.shape_offset_x_spin.setValue(shape.offset_x * 100.0)
+        self.shape_offset_y_spin.setValue(shape.offset_y * 100.0)
         for widget in (
             self.shape_type_combo,
             self.shape_text_edit,
             self.shape_bold_checkbox,
             self.shape_border_spin,
+            self.shape_offset_x_spin,
+            self.shape_offset_y_spin,
         ):
             widget.blockSignals(False)
         self._update_shape_source_label()
@@ -1463,6 +1529,9 @@ class MainWindow(QMainWindow):
         is_import = shape_type in (ShapeType.SVG, ShapeType.IMAGE)
         self.shape_text_edit.setVisible(is_text)
         self.shape_bold_checkbox.setVisible(is_text)
+        self.shape_offset_x_spin.setVisible(is_text)
+        self.shape_offset_y_spin.setVisible(is_text)
+        self.shape_offset_hint_label.setVisible(is_text)
         self.shape_import_button.setVisible(is_import)
         self.shape_source_label.setVisible(is_import)
 
@@ -1485,11 +1554,37 @@ class MainWindow(QMainWindow):
         shape.text = self.shape_text_edit.text()
         shape.bold = self.shape_bold_checkbox.isChecked()
         shape.border_width_mm = self.shape_border_spin.value()
+        shape.offset_x = self.shape_offset_x_spin.value() / 100.0
+        shape.offset_y = self.shape_offset_y_spin.value() / 100.0
         self._update_shape_visibility()
         self._update_shape_info_label()
+        self._update_source_preview()
         self._current_material_meshes = None
         self._current_backlight_result = None
 
+        if self._state is AppState.MESH_READY:
+            self._set_state(AppState.PARAMS_DIRTY)
+
+    _ARROW_NUDGE_STEP = 0.01  # identique au pas des spinboxes Position X/Y (1%)
+
+    def _on_preview_arrow_key(self, dx: int, dy: int) -> None:
+        shape = self._project.scene.shape
+        if shape.shape_type is not ShapeType.TEXT:
+            return
+        shape.offset_x += dx * self._ARROW_NUDGE_STEP
+        shape.offset_y += dy * self._ARROW_NUDGE_STEP
+
+        for widget in (self.shape_offset_x_spin, self.shape_offset_y_spin):
+            widget.blockSignals(True)
+        self.shape_offset_x_spin.setValue(shape.offset_x * 100.0)
+        self.shape_offset_y_spin.setValue(shape.offset_y * 100.0)
+        for widget in (self.shape_offset_x_spin, self.shape_offset_y_spin):
+            widget.blockSignals(False)
+
+        self._update_shape_info_label()
+        self._update_source_preview()
+        self._current_material_meshes = None
+        self._current_backlight_result = None
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 

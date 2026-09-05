@@ -75,6 +75,40 @@ def test_text_shape_empty_string_produces_empty_mask():
     assert not mask.any()
 
 
+def _mask_centroid(mask: np.ndarray) -> tuple[float, float]:
+    ys, xs = np.nonzero(mask)
+    return ys.mean(), xs.mean()
+
+
+def test_text_shape_offset_x_moves_the_mask_horizontally():
+    # Canevas large par rapport au texte pour eviter tout rognage sur les
+    # bords lors du decalage (une lettre seule remplit ~90% d'un canevas
+    # ajuste a sa taille -- voir marge dans _text_mask).
+    wide_cols = 800
+    centered = build_shape_mask(ShapeParams(shape_type=ShapeType.TEXT, text="M"), ROWS, wide_cols)
+    shifted = build_shape_mask(
+        ShapeParams(shape_type=ShapeType.TEXT, text="M", offset_x=0.2), ROWS, wide_cols
+    )
+
+    cy0, cx0 = _mask_centroid(centered)
+    cy1, cx1 = _mask_centroid(shifted)
+    assert cx1 - cx0 == pytest.approx(0.2 * wide_cols, abs=1.0)
+    assert cy1 == pytest.approx(cy0, abs=1.0)  # pas de derive verticale
+
+
+def test_text_shape_offset_y_moves_the_mask_vertically():
+    tall_rows = 800
+    centered = build_shape_mask(ShapeParams(shape_type=ShapeType.TEXT, text="M"), tall_rows, COLS)
+    shifted = build_shape_mask(
+        ShapeParams(shape_type=ShapeType.TEXT, text="M", offset_y=-0.15), tall_rows, COLS
+    )
+
+    cy0, cx0 = _mask_centroid(centered)
+    cy1, cx1 = _mask_centroid(shifted)
+    assert cy1 - cy0 == pytest.approx(-0.15 * tall_rows, abs=1.0)
+    assert cx1 == pytest.approx(cx0, abs=1.0)
+
+
 def test_build_shape_mask_rejects_image_and_svg_without_prior_loading():
     with pytest.raises(ValueError):
         build_shape_mask(ShapeParams(shape_type=ShapeType.IMAGE, source_image_path="x.png"), ROWS, COLS)

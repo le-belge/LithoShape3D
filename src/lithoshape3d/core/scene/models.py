@@ -230,6 +230,12 @@ class ShapeParams:
     """Bordure geometrique qui suit le contour de la forme (dilatation) --
     0 = pas de bordure. Optionnellement multi-materiau (voir Zone.material) ;
     la geometrie fonctionne independamment de tout materiau assigne."""
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    """Decalage de la forme, fraction de la largeur/hauteur canonique de la
+    Scene (meme convention que ImageTransform.offset_x/y) -- non borne, la
+    forme peut sortir du cadre. Utilise uniquement par TEXT aujourd'hui (voir
+    core/geometry/shape.py:_text_mask)."""
 
 
 @dataclass

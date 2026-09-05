@@ -1,9 +1,10 @@
 import time
 
 import numpy as np
+import pytest
 
 from lithoshape3d.ai.segmentation import MockSegmentationBackend
-from lithoshape3d.core.scene.models import CompositionMode, ReliefMode
+from lithoshape3d.core.scene.models import CompositionMode, ReliefMode, ShapeType
 from lithoshape3d.ui import main_window as main_window_module
 from lithoshape3d.ui.state import AppState
 from tests.fixtures.synthetic_images import make_gradient_image
@@ -445,3 +446,53 @@ def test_remove_background_auto_offers_download_when_model_missing(
     main_window._on_remove_background_auto_clicked()
 
     assert asked.get("called") is True
+
+
+def _select_shape_type(main_window, shape_type):
+    index = main_window.shape_type_combo.findData(shape_type)
+    main_window.shape_type_combo.setCurrentIndex(index)
+
+
+def test_offset_spins_visible_only_for_text_shape(main_window):
+    # isVisible() exige toute la chaine de fenetres affichee (jamais le cas
+    # en test headless) -- isHidden() reflete le flag setVisible() applique
+    # par _update_shape_visibility(), independamment de l'affichage reel.
+    _select_shape_type(main_window, ShapeType.TEXT)
+    assert not main_window.shape_offset_x_spin.isHidden()
+    assert not main_window.shape_offset_y_spin.isHidden()
+
+    _select_shape_type(main_window, ShapeType.RECTANGLE)
+    assert main_window.shape_offset_x_spin.isHidden()
+    assert main_window.shape_offset_y_spin.isHidden()
+
+
+def test_on_shape_changed_writes_offsets_as_fractions(main_window):
+    _select_shape_type(main_window, ShapeType.TEXT)
+    main_window.shape_offset_x_spin.setValue(15.0)
+    main_window.shape_offset_y_spin.setValue(-30.0)
+
+    assert main_window._project.scene.shape.offset_x == pytest.approx(0.15)
+    assert main_window._project.scene.shape.offset_y == pytest.approx(-0.30)
+
+
+def test_arrow_key_nudges_text_offset_and_updates_spinboxes(main_window):
+    _select_shape_type(main_window, ShapeType.TEXT)
+    main_window.shape_offset_x_spin.setValue(0.0)
+    main_window.shape_offset_y_spin.setValue(0.0)
+
+    main_window._on_preview_arrow_key(1, 0)
+
+    shape = main_window._project.scene.shape
+    assert shape.offset_x == pytest.approx(0.01)
+    assert shape.offset_y == pytest.approx(0.0)
+    assert main_window.shape_offset_x_spin.value() == pytest.approx(1.0)
+
+
+def test_arrow_key_is_a_no_op_outside_text_shape(main_window):
+    _select_shape_type(main_window, ShapeType.RECTANGLE)
+
+    main_window._on_preview_arrow_key(1, 1)
+
+    shape = main_window._project.scene.shape
+    assert shape.offset_x == 0.0
+    assert shape.offset_y == 0.0
