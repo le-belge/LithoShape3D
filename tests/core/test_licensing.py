@@ -48,6 +48,23 @@ def test_valid_key_verifies_and_returns_info(keypair):
     assert is_valid_license_key(key, public_key_hex=public_hex)
 
 
+def test_valid_key_verifies_even_with_a_stray_line_break_pasted_in_the_middle(keypair):
+    """Retour terrain reel : "cle invalide !" -- un copier-coller depuis un
+    bloc de code qui wrap visuellement dans un chat/terminal peut inserer un
+    saut de ligne au milieu de la cle. Le base64url ne contient jamais
+    d'espace : les retirer TOUS (pas seulement en debut/fin) est toujours
+    sans danger pour une cle legitime."""
+    private_key, public_hex = keypair
+    key = _issue(private_key, license_id="order-42", email="mike@example.com")
+    midpoint = len(key) // 2
+    corrupted = key[:midpoint] + "\n" + key[midpoint:]
+
+    info = verify_license_key(corrupted, public_key_hex=public_hex)
+
+    assert info.license_id == "order-42"
+    assert is_valid_license_key("  " + key[:midpoint] + "   " + key[midpoint:] + "  ", public_key_hex=public_hex)
+
+
 def test_key_signed_by_a_different_private_key_is_rejected(keypair):
     _, public_hex = keypair
     other_private_key = Ed25519PrivateKey.generate()

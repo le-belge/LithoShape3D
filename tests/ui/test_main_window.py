@@ -138,6 +138,47 @@ def test_export_writes_a_valid_stl(main_window, tmp_path, monkeypatch):
     assert validate_mesh(reloaded).is_valid
 
 
+def test_export_shows_a_busy_cursor_while_writing_the_file(main_window, tmp_path, monkeypatch):
+    """Retour terrain : l'export (ecriture STL bloquante sur le thread
+    principal, pas de worker Qt) ne montrait aucun visuel d'attente --
+    verifie que `_busy_export` bascule bien un curseur sablier le temps de
+    l'ecriture, puis le restaure (voir `_on_export_clicked`)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    _load(main_window, tmp_path)
+    params = main_window._current_geometry_parameters()
+    from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
+    from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
+
+    heightmap = heightmap_from_image_path(main_window._image_path, params)
+    mesh = build_slab_mesh(heightmap, mask=None, params=params)
+    main_window._on_generation_succeeded(mesh)
+
+    output_path = tmp_path / "export_busy.stl"
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(output_path), "STL (*.stl)"),
+    )
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+
+    cursor_during_export = []
+    original_export_stl = main_window_module.export_stl
+
+    def _spy_export_stl(mesh, path):
+        cursor_during_export.append(QApplication.instance().overrideCursor())
+        return original_export_stl(mesh, path)
+
+    monkeypatch.setattr("lithoshape3d.ui.main_window.export_stl", _spy_export_stl)
+
+    main_window._on_export_clicked()
+
+    assert cursor_during_export
+    assert cursor_during_export[0] is not None
+    assert cursor_during_export[0].shape() == Qt.CursorShape.WaitCursor
+    assert QApplication.instance().overrideCursor() is None  # restaure apres coup
+
+
 def test_reset_restores_default_parameters(main_window, tmp_path):
     _load(main_window, tmp_path)
     main_window.width_spin.setValue(250.0)

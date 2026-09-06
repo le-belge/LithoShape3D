@@ -70,7 +70,12 @@ def verify_license_key(key_str: str, public_key_hex: str | None = None) -> Licen
     """
     if public_key_hex is None:
         public_key_hex = PUBLIC_KEY_HEX
-    key_str = (key_str or "").strip()
+    # Retire TOUS les espaces/retours a la ligne (pas seulement en debut/fin) :
+    # retour terrain reel, un copier-coller depuis un bloc de code qui wrap
+    # visuellement peut inserer un saut de ligne au milieu de la cle -- le
+    # base64url ne contient jamais d'espace, ce nettoyage est donc toujours
+    # sans danger (jamais une cle legitime affectee).
+    key_str = "".join((key_str or "").split())
     if not key_str or "." not in key_str:
         raise InvalidLicenseError("Cle de licence vide ou mal formee.")
 

@@ -9,6 +9,7 @@ est cree automatiquement.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -415,17 +416,21 @@ class MainWindow(QMainWindow):
         self.zoom_preview_button.clicked.connect(self._on_zoom_preview_clicked)
         layout.addWidget(self.zoom_preview_button)
 
+        # Regroupees dans leur propre boite (retour terrain, revue ergonomie
+        # avant beta) : ces 3 boutons empiles avec le meme poids visuel que
+        # "Zoom apercu" (sans rapport) laissaient un nouvel utilisateur
+        # hesiter sur lequel utiliser en premier -- l'action rapide
+        # (automatique) est mise en avant, les deux autres restent
+        # accessibles juste en dessous mais visuellement rattachees au
+        # meme groupe "Detourage".
+        detour_group = QGroupBox(self.tr("Detourage du sujet"))
+        detour_layout = QVBoxLayout(detour_group)
+        detour_layout.setSpacing(6)
+
         self.remove_background_button = QPushButton(self.tr("Retirer le fond..."))
         self.remove_background_button.setEnabled(False)
         self.remove_background_button.clicked.connect(self._on_remove_background_auto_clicked)
-        layout.addWidget(self.remove_background_button)
-
-        self.remove_background_manual_button = QPushButton(self.tr("Retirer le fond (precision manuelle)..."))
-        self.remove_background_manual_button.setEnabled(False)
-        self.remove_background_manual_button.clicked.connect(self._on_remove_background_manual_clicked)
-        if self._segmentation_backend is None:
-            self.remove_background_manual_button.setToolTip(self.tr("Necessite macOS (SAM2)"))
-        layout.addWidget(self.remove_background_manual_button)
+        detour_layout.addWidget(self.remove_background_button)
 
         self.remove_background_as_shape_button = QPushButton(self.tr("Utiliser le detourage comme forme..."))
         self.remove_background_as_shape_button.setEnabled(False)
@@ -437,7 +442,16 @@ class MainWindow(QMainWindow):
             )
         )
         self.remove_background_as_shape_button.clicked.connect(self._on_remove_background_as_shape_clicked)
-        layout.addWidget(self.remove_background_as_shape_button)
+        detour_layout.addWidget(self.remove_background_as_shape_button)
+
+        self.remove_background_manual_button = QPushButton(self.tr("Retirer le fond (precision manuelle)..."))
+        self.remove_background_manual_button.setEnabled(False)
+        self.remove_background_manual_button.clicked.connect(self._on_remove_background_manual_clicked)
+        if self._segmentation_backend is None:
+            self.remove_background_manual_button.setToolTip(self.tr("Necessite macOS (SAM2)"))
+        detour_layout.addWidget(self.remove_background_manual_button)
+
+        layout.addWidget(detour_group)
 
         self.filename_label = QLabel("")
         self.filename_label.setWordWrap(True)
@@ -519,90 +533,6 @@ class MainWindow(QMainWindow):
         relief_form.addRow(self.tr("Type"), self.relief_mode_combo)
         layout.addWidget(relief_group)
 
-        composition_group = QGroupBox(self.tr("Composition"))
-        self.composition_group = composition_group  # ancre de scroll : onglet "Geometrie / Backlight"
-        composition_form = QFormLayout(composition_group)
-        composition_form.setSpacing(8)
-        self.composition_mode_combo = QComboBox()
-        self.composition_mode_combo.addItem(self.tr("Base"), CompositionMode.BASE)
-        self.composition_mode_combo.addItem(self.tr("Ajouter"), CompositionMode.ADD)
-        self.composition_mode_combo.addItem(self.tr("Remplacer"), CompositionMode.REPLACE)
-        composition_form.addRow(self.tr("Mode"), self.composition_mode_combo)
-        layout.addWidget(composition_group)
-
-        material_group = QGroupBox(self.tr("Materiau (impression)"))
-        material_form = QFormLayout(material_group)
-        material_form.setSpacing(8)
-
-        self.material_name_edit = QLineEdit()
-        self.material_name_edit.setPlaceholderText(self.tr("ex. Blanc, Rose..."))
-        material_form.addRow(self.tr("Nom"), self.material_name_edit)
-
-        self.material_color_button = QPushButton()
-        self.material_color_button.setFixedWidth(60)
-        self.material_color_button.clicked.connect(self._on_pick_material_color)
-        material_form.addRow(self.tr("Couleur"), self.material_color_button)
-
-        self.material_filament_combo = QComboBox()
-        self.material_filament_combo.addItem(self.tr("(non specifie)"), None)
-        for filament_type in ("PLA", "PETG", "TPU", "Autre"):
-            self.material_filament_combo.addItem(filament_type, filament_type)
-        material_form.addRow(self.tr("Type"), self.material_filament_combo)
-
-        self.material_slot_spin = QSpinBox()
-        self.material_slot_spin.setRange(-1, 15)
-        self.material_slot_spin.setSpecialValueText("Aucun")
-        material_form.addRow(self.tr("Slot filament"), self.material_slot_spin)
-
-        layout.addWidget(material_group)
-
-        color_strategy_group = QGroupBox(self.tr("Strategie couleur"))
-        color_strategy_form = QFormLayout(color_strategy_group)
-        color_strategy_form.setSpacing(8)
-
-        self.color_strategy_combo = QComboBox()
-        self.color_strategy_combo.addItem(self.tr("Materiau seul"), ColorStrategy.MATERIAL_ONLY)
-        self.color_strategy_combo.addItem(self.tr("Insert retro-eclaire"), ColorStrategy.BACKLIGHT_INSERT)
-        self.color_strategy_combo.setToolTip(
-            "Materiau seul : assigner un materiau/une couleur a cette zone ne "
-            "change jamais la geometrie deja composee.\n"
-            "Insert retro-eclaire : conserve une fine peau blanche en facade et "
-            "genere un insert colore independant a placer derriere."
-        )
-        color_strategy_form.addRow(self.tr("Mode"), self.color_strategy_combo)
-
-        self.backlight_skin_spin = QDoubleSpinBox()
-        self.backlight_skin_spin.setRange(0.05, 2.0)
-        self.backlight_skin_spin.setSingleStep(0.05)
-        self.backlight_skin_spin.setSuffix(" mm")
-        self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
-        self.backlight_skin_spin.setToolTip(
-            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
-        )
-        color_strategy_form.addRow(self.tr("Epaisseur peau blanche"), self.backlight_skin_spin)
-
-        self.backlight_insert_thickness_spin = QDoubleSpinBox()
-        self.backlight_insert_thickness_spin.setRange(0.1, 2.0)
-        self.backlight_insert_thickness_spin.setSingleStep(0.05)
-        self.backlight_insert_thickness_spin.setSuffix(" mm")
-        self.backlight_insert_thickness_spin.setValue(0.60)
-        self.backlight_insert_thickness_spin.setToolTip(
-            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
-        )
-        color_strategy_form.addRow(self.tr("Epaisseur insert"), self.backlight_insert_thickness_spin)
-
-        self.backlight_clearance_combo = QComboBox()
-        self.backlight_clearance_combo.addItem(self.tr("Serre (0.10 mm)"), 0.10)
-        self.backlight_clearance_combo.addItem(self.tr("Standard (0.20 mm)"), 0.20)
-        self.backlight_clearance_combo.addItem(self.tr("Facile (0.30 mm)"), 0.30)
-        self.backlight_clearance_combo.setCurrentIndex(1)
-        self.backlight_clearance_combo.setToolTip(
-            "Jeu lateral entre l'insert et la cavite -- valeur par defaut validee par impression physique reelle."
-        )
-        color_strategy_form.addRow(self.tr("Jeu XY"), self.backlight_clearance_combo)
-
-        layout.addWidget(color_strategy_group)
-
         geometry_group = QGroupBox(self.tr("Geometrie"))
         geometry_form = QFormLayout(geometry_group)
         geometry_form.setSpacing(8)
@@ -664,6 +594,7 @@ class MainWindow(QMainWindow):
         shape_layout = QVBoxLayout(shape_group)
         shape_layout.setSpacing(8)
         shape_form = QFormLayout()
+        self.shape_form = shape_form  # utilise par _update_shape_visibility (masquer la ligne entiere, pas juste le champ)
         shape_form.setSpacing(8)
 
         self.shape_type_combo = QComboBox()
@@ -749,6 +680,98 @@ class MainWindow(QMainWindow):
         shape_layout.addWidget(self.shape_to_backlight_button)
 
         layout.addWidget(shape_group)
+
+        # Ordre du panneau (retour terrain, revue ergonomie avant beta) :
+        # Relief/Geometrie/Image/Forme (regles qu'une lithophanie simple
+        # utilise systematiquement) passent AVANT Composition/Materiau/
+        # Strategie couleur (concepts multi-zones/multi-materiaux, pertinents
+        # seulement au-dela d'une piece basique) -- un debutant n'a plus a
+        # faire defiler des reglages avances avant d'atteindre les reglages
+        # de base.
+        composition_group = QGroupBox(self.tr("Composition"))
+        self.composition_group = composition_group  # ancre de scroll : onglet "Geometrie / Backlight"
+        composition_form = QFormLayout(composition_group)
+        composition_form.setSpacing(8)
+        self.composition_mode_combo = QComboBox()
+        self.composition_mode_combo.addItem(self.tr("Base"), CompositionMode.BASE)
+        self.composition_mode_combo.addItem(self.tr("Ajouter"), CompositionMode.ADD)
+        self.composition_mode_combo.addItem(self.tr("Remplacer"), CompositionMode.REPLACE)
+        composition_form.addRow(self.tr("Mode"), self.composition_mode_combo)
+        layout.addWidget(composition_group)
+
+        material_group = QGroupBox(self.tr("Materiau (impression)"))
+        material_form = QFormLayout(material_group)
+        material_form.setSpacing(8)
+
+        self.material_name_edit = QLineEdit()
+        self.material_name_edit.setPlaceholderText(self.tr("ex. Blanc, Rose..."))
+        material_form.addRow(self.tr("Nom"), self.material_name_edit)
+
+        self.material_color_button = QPushButton()
+        self.material_color_button.setFixedWidth(60)
+        self.material_color_button.clicked.connect(self._on_pick_material_color)
+        material_form.addRow(self.tr("Couleur"), self.material_color_button)
+
+        self.material_filament_combo = QComboBox()
+        self.material_filament_combo.addItem(self.tr("(non specifie)"), None)
+        for filament_type in ("PLA", "PETG", "TPU", "Autre"):
+            self.material_filament_combo.addItem(filament_type, filament_type)
+        material_form.addRow(self.tr("Type"), self.material_filament_combo)
+
+        self.material_slot_spin = QSpinBox()
+        self.material_slot_spin.setRange(-1, 15)
+        self.material_slot_spin.setSpecialValueText("Aucun")
+        material_form.addRow(self.tr("Slot filament"), self.material_slot_spin)
+
+        layout.addWidget(material_group)
+
+        color_strategy_group = QGroupBox(self.tr("Strategie couleur"))
+        color_strategy_form = QFormLayout(color_strategy_group)
+        self.color_strategy_form = color_strategy_form  # utilise par _on_color_strategy_changed (masquer la ligne entiere)
+        color_strategy_form.setSpacing(8)
+
+        self.color_strategy_combo = QComboBox()
+        self.color_strategy_combo.addItem(self.tr("Materiau seul"), ColorStrategy.MATERIAL_ONLY)
+        self.color_strategy_combo.addItem(self.tr("Insert retro-eclaire"), ColorStrategy.BACKLIGHT_INSERT)
+        self.color_strategy_combo.setToolTip(
+            "Materiau seul : assigner un materiau/une couleur a cette zone ne "
+            "change jamais la geometrie deja composee.\n"
+            "Insert retro-eclaire : conserve une fine peau blanche en facade et "
+            "genere un insert colore independant a placer derriere."
+        )
+        color_strategy_form.addRow(self.tr("Mode"), self.color_strategy_combo)
+
+        self.backlight_skin_spin = QDoubleSpinBox()
+        self.backlight_skin_spin.setRange(0.05, 2.0)
+        self.backlight_skin_spin.setSingleStep(0.05)
+        self.backlight_skin_spin.setSuffix(" mm")
+        self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
+        self.backlight_skin_spin.setToolTip(
+            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
+        )
+        color_strategy_form.addRow(self.tr("Epaisseur peau blanche"), self.backlight_skin_spin)
+
+        self.backlight_insert_thickness_spin = QDoubleSpinBox()
+        self.backlight_insert_thickness_spin.setRange(0.1, 2.0)
+        self.backlight_insert_thickness_spin.setSingleStep(0.05)
+        self.backlight_insert_thickness_spin.setSuffix(" mm")
+        self.backlight_insert_thickness_spin.setValue(0.60)
+        self.backlight_insert_thickness_spin.setToolTip(
+            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
+        )
+        color_strategy_form.addRow(self.tr("Epaisseur insert"), self.backlight_insert_thickness_spin)
+
+        self.backlight_clearance_combo = QComboBox()
+        self.backlight_clearance_combo.addItem(self.tr("Serre (0.10 mm)"), 0.10)
+        self.backlight_clearance_combo.addItem(self.tr("Standard (0.20 mm)"), 0.20)
+        self.backlight_clearance_combo.addItem(self.tr("Facile (0.30 mm)"), 0.30)
+        self.backlight_clearance_combo.setCurrentIndex(1)
+        self.backlight_clearance_combo.setToolTip(
+            "Jeu lateral entre l'insert et la cavite -- valeur par defaut validee par impression physique reelle."
+        )
+        color_strategy_form.addRow(self.tr("Jeu XY"), self.backlight_clearance_combo)
+
+        layout.addWidget(color_strategy_group)
 
         support_group = QGroupBox(self.tr("Support d'impression"))
         support_form = QFormLayout(support_group)
@@ -1541,10 +1564,19 @@ class MainWindow(QMainWindow):
             self._set_state(AppState.IMAGE_LOADED if self._image_path else AppState.NO_IMAGE)
 
     def _update_color_strategy_visibility(self) -> None:
+        # `setRowVisible` (pas seulement `widget.setVisible`) : masquer
+        # uniquement le champ laissait son libelle ("Epaisseur peau
+        # blanche", etc.) affiche seul, sans rien a cote -- ligne orpheline
+        # qui donnait l'impression d'un bug d'affichage (retour terrain,
+        # revue ergonomie avant beta).
         is_backlight = self.color_strategy_combo.currentData() is ColorStrategy.BACKLIGHT_INSERT
-        self.backlight_skin_spin.setVisible(is_backlight)
-        self.backlight_insert_thickness_spin.setVisible(is_backlight)
-        self.backlight_clearance_combo.setVisible(is_backlight)
+        for widget in (
+            self.backlight_skin_spin,
+            self.backlight_insert_thickness_spin,
+            self.backlight_clearance_combo,
+        ):
+            widget.setVisible(is_backlight)
+            self.color_strategy_form.setRowVisible(widget, is_backlight)
 
     def _load_support_into_panel(self) -> None:
         support = self._project.scene.support
@@ -1626,15 +1658,24 @@ class MainWindow(QMainWindow):
         self.shape_source_label.setText(Path(source).name if source else "(aucun fichier importe)")
 
     def _update_shape_visibility(self) -> None:
+        # `setRowVisible` sur les champs du QFormLayout (pas seulement
+        # `widget.setVisible`) : masquer uniquement le champ laissait son
+        # libelle ("Texte", "Taille", "Position X/Y"...) affiche seul, sans
+        # rien a cote -- ligne orpheline qui donnait l'impression d'un bug
+        # d'affichage (retour terrain, revue ergonomie avant beta).
         shape_type = self.shape_type_combo.currentData()
         is_text = shape_type is ShapeType.TEXT
         is_import = shape_type in (ShapeType.SVG, ShapeType.IMAGE)
-        self.shape_text_edit.setVisible(is_text)
-        self.shape_bold_checkbox.setVisible(is_text)
-        self.shape_scale_spin.setVisible(is_text)
-        self.shape_offset_x_spin.setVisible(is_text)
-        self.shape_offset_y_spin.setVisible(is_text)
-        self.shape_offset_hint_label.setVisible(is_text)
+        for widget in (
+            self.shape_text_edit,
+            self.shape_bold_checkbox,
+            self.shape_scale_spin,
+            self.shape_offset_x_spin,
+            self.shape_offset_y_spin,
+            self.shape_offset_hint_label,
+        ):
+            widget.setVisible(is_text)
+            self.shape_form.setRowVisible(widget, is_text)
         self.shape_to_backlight_button.setVisible(is_text)
         self.shape_import_button.setVisible(is_import)
         self.shape_source_label.setVisible(is_import)
@@ -2441,6 +2482,26 @@ class MainWindow(QMainWindow):
             mesh.apply_translation(-combined_min)
         return rotated
 
+    @contextmanager
+    def _busy_export(self, message: str):
+        """Visuel d'attente pendant une ecriture de fichier bloquante
+        (retour terrain, revue ergonomie avant beta) : `export_stl`/
+        `export_stl_per_material`/`export_multi_material_3mf` s'executent
+        sur le thread principal (pas de worker Qt ici, contrairement a la
+        generation du mesh) -- sans indication, l'UI semblait figee/plantee
+        le temps de l'ecriture sur un gros fichier. Curseur sablier +
+        message de statut permanent (duree 0) le temps du bloc, restaures
+        systematiquement (meme en cas d'exception, via `finally`)."""
+        from PySide6.QtWidgets import QApplication
+
+        self.statusBar().showMessage(message, 0)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            yield
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _on_export_clicked(self) -> None:
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
@@ -2463,7 +2524,8 @@ class MainWindow(QMainWindow):
 
         oriented = self._oriented_for_vertical_print({"_": self._current_mesh})["_"]
         try:
-            export_stl(oriented, path)
+            with self._busy_export(self.tr("Export STL en cours...")):
+                export_stl(oriented, path)
         except OSError as exc:
             logger.exception("Echec de l'export STL")
             QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'export :\n") + str(exc))
@@ -2489,7 +2551,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            written = export_stl_per_material(material_meshes, directory, base_name=base_name)
+            with self._busy_export(self.tr("Export STL en cours...")):
+                written = export_stl_per_material(material_meshes, directory, base_name=base_name)
         except OSError as exc:
             logger.exception("Echec de l'export STL multi-corps")
             QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'export :\n") + str(exc))
@@ -2528,13 +2591,15 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            export_multi_material_3mf(material_meshes, path)
+            with self._busy_export(self.tr("Export 3MF en cours...")):
+                export_multi_material_3mf(material_meshes, path)
         except Exception as exc:  # noqa: BLE001 -- n'importe quel echec du 3MF doit declencher le repli STL
             logger.warning("Export 3MF multi-objets echoue, repli sur STL par materiau : %s", exc)
             directory = QFileDialog.getExistingDirectory(self, self.tr("Dossier pour les STL par materiau"))
             if not directory:
                 return
-            written = export_stl_per_material(material_meshes, directory, base_name=base_name)
+            with self._busy_export(self.tr("Export STL en cours...")):
+                written = export_stl_per_material(material_meshes, directory, base_name=base_name)
             names = "\n".join(str(p) for p in written)
             QMessageBox.information(
                 self,

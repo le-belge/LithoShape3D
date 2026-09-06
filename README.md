@@ -29,7 +29,7 @@ caissons LightBox.
   (après le correctif chanfrein + plancher 0.6mm, v0.4.2+) — considéré
   comme fonctionnel.
 
-**Version actuelle : 0.7.2.** Ce README couvre l'installation et l'usage de
+**Version actuelle : 0.7.3.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 
