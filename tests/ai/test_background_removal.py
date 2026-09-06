@@ -131,6 +131,24 @@ def test_clean_alpha_mask_leaves_empty_mask_unchanged():
     assert not cleaned.any()
 
 
+def test_clean_alpha_mask_removes_a_thin_bridge_between_two_close_subjects():
+    """Retour terrain reel : "il y a un morceau qui depasse" entre les deux
+    visages d'un couple proche l'un de l'autre -- un pont de matting etroit
+    (mais plus large qu'un simple pixel isole, ex. 4-5px) reliant a tort les
+    deux silhouettes a travers le fond etroit qui les separe doit disparaitre,
+    sans que les deux sujets eux-memes soient rognes."""
+    mask = np.zeros((100, 200), dtype=np.float32)
+    mask[20:80, 10:80] = 1.0  # premier visage
+    mask[20:80, 120:190] = 1.0  # second visage
+    mask[48:53, 80:120] = 1.0  # pont large de 5px entre les deux (fond etroit inclus a tort)
+
+    cleaned = background_removal.clean_alpha_mask(mask)
+
+    assert cleaned[50, 45] > 0.5  # premier visage intact
+    assert cleaned[50, 155] > 0.5  # second visage intact
+    assert cleaned[50, 100] < 0.5  # pont disparu : les deux sujets restent bien separes
+
+
 def test_clean_alpha_mask_falls_back_to_original_if_cleanup_erases_everything():
     """Un sujet trop fin/petit pour survivre a l'ouverture morphologique ne
     doit pas se retrouver avec un masque totalement vide (pire que le bruit

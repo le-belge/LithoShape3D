@@ -28,7 +28,7 @@ caissons LightBox.
 - **Backlight Insert** : prototype expérimental, conservé dans le code mais
   non considéré comme validé physiquement.
 
-**Version actuelle : 0.7.1.** Ce README couvre l'installation et l'usage de
+**Version actuelle : 0.7.2.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 

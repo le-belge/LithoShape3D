@@ -86,6 +86,19 @@ _MIN_COMPONENT_AREA_RATIO = 0.01
 considere comme du bruit de matting (meche de cheveux isolee, esquille de
 segmentation) et retire -- pas un vrai morceau disjoint du sujet."""
 
+_MORPHOLOGY_ITERATIONS = 3
+"""Nombre d'iterations de l'ouverture/fermeture morphologique (voir
+`clean_alpha_mask`). Retour terrain reel : une seule iteration (valeur
+d'origine) ne supprimait pas un pont/eperon de matting (ex. un morceau qui
+"depasse" entre deux visages proches, le fond etroit entre eux etant a
+tort inclus dans le sujet). Verifie empiriquement
+(`tests/ai/test_background_removal.py`) : il faut 3 iterations pour
+eliminer de maniere fiable ce type de pont jusqu'a ~6px de large (une
+seule ou deux iterations laissent passer des ponts de 5-6px), tandis
+qu'une vraie jonction plus large (>= 8px, ex. le cou entre une tete et des
+epaules) reste intacte. Verifie aussi sur une vraie photo : aire totale
+du sujet quasi inchangee (<1% d'ecart) par rapport a 1 iteration."""
+
 _EDGE_SMOOTHING_SIGMA_PX = 1.5
 """Ecart-type (px, resolution native de l'image -- pas encore
 redimensionnee a la grille du panneau) du flou gaussien applique au
@@ -103,6 +116,7 @@ def clean_alpha_mask(
     *,
     min_component_area_ratio: float = _MIN_COMPONENT_AREA_RATIO,
     smoothing_sigma_px: float = _EDGE_SMOOTHING_SIGMA_PX,
+    morphology_iterations: int = _MORPHOLOGY_ITERATIONS,
 ) -> np.ndarray:
     """Nettoie un masque de probabilite float32 [0,1] issu de la
     segmentation (rembg ou SAM2) : retire les ilots de bruit residuels,
@@ -126,8 +140,8 @@ def clean_alpha_mask(
         binary = np.isin(labeled, keep)
 
     structure = ndimage.generate_binary_structure(2, 2)
-    binary = ndimage.binary_opening(binary, structure=structure, iterations=1)
-    binary = ndimage.binary_closing(binary, structure=structure, iterations=1)
+    binary = ndimage.binary_opening(binary, structure=structure, iterations=morphology_iterations)
+    binary = ndimage.binary_closing(binary, structure=structure, iterations=morphology_iterations)
     if not binary.any():
         # Nettoyage trop agressif pour un sujet trop fin/petit a cette
         # resolution -- mieux vaut garder le masque d'origine (silhouette
