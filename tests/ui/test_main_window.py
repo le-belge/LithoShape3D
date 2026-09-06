@@ -479,6 +479,13 @@ def test_remove_background_as_shape_shortcut_sets_shape_to_image_without_a_dialo
     assert shape_mask is not None
     assert shape_mask.any()  # une silhouette non vide a bien ete decoupee
 
+    # Regression : le raccourci basculait bien la Shape en ShapeType.IMAGE,
+    # mais le mode de generation par defaut ("Zone active") ignore
+    # completement la Shape Composer (seul le mode "Composition" la respecte,
+    # voir _on_generate_clicked) -- sans ce bascule automatique, "Generer"
+    # produisait toujours un rectangle plein malgre la silhouette decoupee.
+    assert main_window.view_composition_button.isChecked()
+
 
 def test_remove_background_auto_offers_download_when_model_missing(
     main_window, tmp_path, monkeypatch
@@ -516,6 +523,21 @@ def test_offset_spins_visible_only_for_text_shape(main_window):
     _select_shape_type(main_window, ShapeType.RECTANGLE)
     assert main_window.shape_offset_x_spin.isHidden()
     assert main_window.shape_offset_y_spin.isHidden()
+
+
+def test_selecting_a_non_rectangle_shape_switches_to_composition_mode(main_window):
+    """Regression : le mode "Zone active" (par defaut) ignore la Shape
+    Composer -- toute forme non-rectangulaire (Cercle, Coeur, Etoile, Texte,
+    Image/SVG importee...) doit forcer le mode "Composition", seul mode qui
+    la respecte reellement pendant la generation (_on_generate_clicked)."""
+    assert main_window.view_zone_button.isChecked()
+
+    _select_shape_type(main_window, ShapeType.HEART)
+    assert main_window.view_composition_button.isChecked()
+
+    main_window.view_zone_button.setChecked(True)
+    _select_shape_type(main_window, ShapeType.RECTANGLE)
+    assert main_window.view_zone_button.isChecked()
 
 
 def test_on_shape_changed_writes_offsets_as_fractions(main_window):

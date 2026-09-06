@@ -1662,9 +1662,25 @@ class MainWindow(QMainWindow):
         self._update_source_preview()
         self._current_material_meshes = None
         self._current_backlight_result = None
+        self._ensure_composition_mode_for_shape()
 
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
+
+    def _ensure_composition_mode_for_shape(self) -> None:
+        """Le mode "Zone active" (par defaut) genere via `GenerationWorker`,
+        qui ignore completement la Shape Composer (silhouette globale) --
+        seul le mode "Composition" la prend en compte (voir
+        `_on_generate_clicked`, `shape_mask=self._current_shape_mask()` n'est
+        passe qu'a `CompositionWorker`/`BacklightCompositionWorker`). Sans ce
+        bascule automatique, toute forme non-rectangulaire (cercle, coeur,
+        etoile, texte, image/SVG importee, ou le raccourci "Utiliser le
+        detourage comme forme...") est silencieusement ignoree et la piece
+        generee reste un rectangle plein. Meme precedent deja applique pour
+        la zone Backlight (`_on_shape_to_backlight_clicked`)."""
+        shape = self._project.scene.shape
+        if shape.shape_type is not ShapeType.RECTANGLE:
+            self.view_composition_button.setChecked(True)
 
     _ARROW_NUDGE_STEP = 0.01  # identique au pas des spinboxes Position X/Y (1%)
 
@@ -1772,6 +1788,7 @@ class MainWindow(QMainWindow):
         self._update_shape_info_label()
         self._current_material_meshes = None
         self._current_backlight_result = None
+        self._ensure_composition_mode_for_shape()
         if self._state is AppState.MESH_READY:
             self._set_state(AppState.PARAMS_DIRTY)
 
