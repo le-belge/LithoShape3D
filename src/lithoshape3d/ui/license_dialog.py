@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -40,6 +40,7 @@ class LicenseDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("Licence LithoShape3D")
         self.setMinimumWidth(420)
 

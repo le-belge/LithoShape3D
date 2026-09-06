@@ -86,6 +86,7 @@ class LightboxLettersDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("LightBox Letters")
         self.setMinimumWidth(560)
         self.setMinimumHeight(760)

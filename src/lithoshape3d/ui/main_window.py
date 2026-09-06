@@ -15,7 +15,7 @@ import numpy as np
 import trimesh
 from PIL import Image
 from PySide6.QtCore import Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -240,6 +240,7 @@ class ImageZoomDialog(QDialog):
 
     def __init__(self, pixmap: QPixmap, title: str, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle(title)
         self.resize(900, 700)
 
@@ -950,6 +951,8 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Face", lambda: self.scene_viewer.view_front())
         view_menu.addAction("Isometrique", lambda: self.scene_viewer.view_isometric())
         view_menu.addAction("Reset camera", lambda: self.scene_viewer.reset_camera())
+
+        self._build_theme_menu()
 
         tools_menu = self.menuBar().addMenu("Outils")
         lightbox_letters_action = QAction("LightBox Letters...", self)
@@ -2565,6 +2568,39 @@ class MainWindow(QMainWindow):
 
         dialog = AboutDialog(self)
         dialog.exec()
+
+    def _build_theme_menu(self) -> None:
+        from lithoshape3d.ui.theme import stored_theme_is_dark
+
+        theme_menu = self.menuBar().addMenu("Theme")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        dark_action = QAction("Sombre (Carbon Glow)", self)
+        dark_action.setCheckable(True)
+        light_action = QAction("Clair (Litho Lab)", self)
+        light_action.setCheckable(True)
+
+        is_dark = stored_theme_is_dark()
+        dark_action.setChecked(is_dark)
+        light_action.setChecked(not is_dark)
+
+        dark_action.triggered.connect(lambda: self._on_theme_action_toggled(True))
+        light_action.triggered.connect(lambda: self._on_theme_action_toggled(False))
+
+        group.addAction(dark_action)
+        group.addAction(light_action)
+        theme_menu.addAction(dark_action)
+        theme_menu.addAction(light_action)
+
+    def _on_theme_action_toggled(self, dark: bool) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from lithoshape3d.ui.theme import set_theme_dark
+
+        app = QApplication.instance()
+        if app is not None:
+            set_theme_dark(app, dark)
 
     def _open_license_dialog(self) -> None:
         from lithoshape3d.ui.license_dialog import LicenseDialog

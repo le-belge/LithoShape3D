@@ -22,7 +22,7 @@ from matplotlib.colors import LinearSegmentedColormap
 
 from lithoshape3d.viewer.adapter import mesh_to_polydata
 
-BACKGROUND_COLOR = "#d9dade"
+BACKGROUND_COLOR = "#161F24"  # theme "Carbon Glow" -- voir ui/theme.py
 MESH_COLOR = "#8a8672"
 BACKLIGHT_BACKGROUND_COLOR = "#0a0a0c"
 BACKLIGHT_DARK_COLOR = "#0c0600"  # matiere epaisse : peu de lumiere transmise

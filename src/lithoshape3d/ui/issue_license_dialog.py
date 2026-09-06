@@ -7,6 +7,7 @@ ce menu n'existe donc que sur la machine du vendeur. Voir
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -25,6 +26,7 @@ class IssueLicenseDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("Generer une licence (vendeur)")
         self.setMinimumWidth(460)
 

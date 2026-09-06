@@ -294,6 +294,7 @@ class MaskEditorDialog(QDialog):
         subject_isolation_mode: bool = False,
     ):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.subject_isolation_mode = subject_isolation_mode
         self.setWindowTitle("Retirer le fond" if subject_isolation_mode else f"Editer le masque - {zone_name}")
         self.resize(760, 680)

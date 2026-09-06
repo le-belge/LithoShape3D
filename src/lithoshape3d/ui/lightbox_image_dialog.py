@@ -99,6 +99,7 @@ class LightboxImageDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("LightBox depuis image")
         self.setMinimumWidth(900)
 

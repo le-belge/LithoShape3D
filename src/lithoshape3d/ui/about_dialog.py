@@ -6,6 +6,7 @@ page marketing."""
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -23,6 +24,7 @@ _COPYRIGHT = "© 2026 LithoShape3D"
 class AboutDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         from lithoshape3d import __version__
 
         self.setWindowTitle(f"A propos de {BRAND_NAME}")

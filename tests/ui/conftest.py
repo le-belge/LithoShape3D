@@ -1,5 +1,8 @@
+import tempfile
+
 import pytest
 import pyvista as pv
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from lithoshape3d.ui.main_window import MainWindow
@@ -8,6 +11,12 @@ from lithoshape3d.ui.main_window import MainWindow
 @pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
+    # Isole TOUTE lecture/ecriture QSettings (theme, licence, ...) de la
+    # suite dans un repertoire jetable -- jamais les vraies preferences de
+    # la machine qui fait tourner les tests.
+    settings_dir = tempfile.mkdtemp(prefix="lithoshape3d-test-settings-")
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, settings_dir)
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     yield app
 
 
