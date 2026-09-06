@@ -576,7 +576,9 @@ class MainWindow(QMainWindow):
         self.backlight_skin_spin.setSingleStep(0.05)
         self.backlight_skin_spin.setSuffix(" mm")
         self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
-        self.backlight_skin_spin.setToolTip(self.tr("Valeur experimentale, a valider par de vraies impressions."))
+        self.backlight_skin_spin.setToolTip(
+            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
+        )
         color_strategy_form.addRow(self.tr("Epaisseur peau blanche"), self.backlight_skin_spin)
 
         self.backlight_insert_thickness_spin = QDoubleSpinBox()
@@ -584,7 +586,9 @@ class MainWindow(QMainWindow):
         self.backlight_insert_thickness_spin.setSingleStep(0.05)
         self.backlight_insert_thickness_spin.setSuffix(" mm")
         self.backlight_insert_thickness_spin.setValue(0.60)
-        self.backlight_insert_thickness_spin.setToolTip(self.tr("Valeur experimentale, a valider par de vraies impressions."))
+        self.backlight_insert_thickness_spin.setToolTip(
+            self.tr("Valeur validee par impression physique reelle -- prudence si vous vous eloignez fortement du defaut.")
+        )
         color_strategy_form.addRow(self.tr("Epaisseur insert"), self.backlight_insert_thickness_spin)
 
         self.backlight_clearance_combo = QComboBox()
@@ -593,7 +597,7 @@ class MainWindow(QMainWindow):
         self.backlight_clearance_combo.addItem(self.tr("Facile (0.30 mm)"), 0.30)
         self.backlight_clearance_combo.setCurrentIndex(1)
         self.backlight_clearance_combo.setToolTip(
-            "Jeu lateral entre l'insert et la cavite -- valeurs experimentales."
+            "Jeu lateral entre l'insert et la cavite -- valeur par defaut validee par impression physique reelle."
         )
         color_strategy_form.addRow(self.tr("Jeu XY"), self.backlight_clearance_combo)
 

@@ -25,8 +25,9 @@ caissons LightBox.
 - **LightBox Designer** : première brique core/CLI pour générer un caisson
   de texte simple ou de silhouette image/SVG, avec capot plat ou façade
   lithophanie séparée.
-- **Backlight Insert** : prototype expérimental, conservé dans le code mais
-  non considéré comme validé physiquement.
+- **Backlight Insert** : validé par impression physique par l'utilisateur
+  (après le correctif chanfrein + plancher 0.6mm, v0.4.2+) — considéré
+  comme fonctionnel.
 
 **Version actuelle : 0.7.2.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,

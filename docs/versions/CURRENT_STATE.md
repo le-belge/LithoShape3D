@@ -76,7 +76,7 @@ Légende : `DONE` (release-gate franchi) · `IMPLEMENTED_NOT_FIELD_VALIDATED`
 | Matériau par zone (nom/couleur/filament/slot) | DONE | |
 | Partition mesh par matériau | DONE | même règle de recouvrement que la composition de hauteur |
 | **Material Only** (couleur sans changement de géométrie) | DONE | corrige un bug réel signalé par l'utilisateur (relief involontaire) ; invariance de surface prouvée numériquement par test |
-| **Backlight Insert** | EXPERIMENTAL | **PHYSICAL TEST #1 — FAIL** (voir note détaillée ci-dessous). Toujours EXPERIMENTAL après le hotfix v0.4.2 : correctif géométrique appliqué et testé, mais validation physique V2 en attente |
+| **Backlight Insert** | DONE | Après le correctif chanfrein + plancher 0.6mm (voir note détaillée ci-dessous), l'utilisateur a validé la fonction par impression physique reelle -- considérée fonctionnelle depuis. Historique des deux échecs précédents (v0.4.2) conservé ci-dessous pour mémoire. |
 | Front Insert | TODO (non commencé, prévu dans l'enum) | |
 | Export 3MF multi-matériaux | IMPLEMENTED_NOT_FIELD_VALIDATED | export standard `trimesh.Scene`, corps alignés dans le même repère — **jamais ouvert dans un vrai slicer** (Bambu Studio demandé deux fois cette session, accès refusé les deux fois par l'utilisateur via `request_access`, non contourné) |
 | Pied d'impression (plat/renforcé) | DONE | généralisé aux silhouettes non rectangulaires (union manifold3d réelle, pas juste un contact de surface) |
