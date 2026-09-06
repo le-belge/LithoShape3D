@@ -81,15 +81,78 @@ def download() -> None:
     new_session(MODEL_NAME)
 
 
+_MIN_COMPONENT_AREA_RATIO = 0.01
+"""Un ilot dont l'aire est sous ce ratio de la plus grande composante est
+considere comme du bruit de matting (meche de cheveux isolee, esquille de
+segmentation) et retire -- pas un vrai morceau disjoint du sujet."""
+
+_EDGE_SMOOTHING_SIGMA_PX = 1.5
+"""Ecart-type (px, resolution native de l'image -- pas encore
+redimensionnee a la grille du panneau) du flou gaussien applique au
+contour apres nettoyage morphologique : attenue les marches d'escalier en
+dents de scie visibles une fois le masque devenu la silhouette de la piece
+(retour terrain "artefacts qui genent autour du detourage"), sans deplacer
+le contour global du sujet. `resize_array` (cf. `core/image/preprocessing.py`)
+anti-aliase deja le redimensionnement vers la grille du panneau, mais ne
+peut pas corriger un contour deja en dents de scie a la resolution
+source -- ce lissage agit donc EN AMONT, sur le masque natif."""
+
+
+def clean_alpha_mask(
+    mask: np.ndarray,
+    *,
+    min_component_area_ratio: float = _MIN_COMPONENT_AREA_RATIO,
+    smoothing_sigma_px: float = _EDGE_SMOOTHING_SIGMA_PX,
+) -> np.ndarray:
+    """Nettoie un masque de probabilite float32 [0,1] issu de la
+    segmentation (rembg ou SAM2) : retire les ilots de bruit residuels,
+    lisse les petites aigrettes en dents de scie du contour (ouverture puis
+    fermeture morphologiques), et adoucit le contour final (flou gaussien
+    leger, sans re-binariser -- le masque reste continu [0,1], meme
+    contrat de sortie que l'entree).
+
+    Retourne `mask` inchange si entierement vide (rien a nettoyer)."""
+    from scipy import ndimage
+
+    binary = mask >= 0.5
+    if not binary.any():
+        return mask
+
+    labeled, count = ndimage.label(binary)
+    if count > 1:
+        sizes = ndimage.sum(binary, labeled, index=range(1, count + 1))
+        largest = sizes.max()
+        keep = [i + 1 for i, size in enumerate(sizes) if size >= largest * min_component_area_ratio]
+        binary = np.isin(labeled, keep)
+
+    structure = ndimage.generate_binary_structure(2, 2)
+    binary = ndimage.binary_opening(binary, structure=structure, iterations=1)
+    binary = ndimage.binary_closing(binary, structure=structure, iterations=1)
+    if not binary.any():
+        # Nettoyage trop agressif pour un sujet trop fin/petit a cette
+        # resolution -- mieux vaut garder le masque d'origine (silhouette
+        # brute) qu'un masque entierement vide.
+        return mask
+
+    smoothed = ndimage.gaussian_filter(binary.astype(np.float32), sigma=smoothing_sigma_px)
+    return smoothed
+
+
 def remove_background(image: Image.Image) -> np.ndarray:
     """Retourne un masque de probabilite float32 [0,1], meme resolution que
     `image` (H, W) -- 1.0 = sujet, 0.0 = fond. Meme contrat de sortie que
     SegmentationSession.segment() (ai/segmentation/base.py) pour rester
     utilisable partout ou un masque continu est attendu, meme si ce n'est
-    pas formellement le meme protocole (pas de prompt par points ici)."""
+    pas formellement le meme protocole (pas de prompt par points ici).
+
+    Le masque brut de rembg est ensuite nettoye (`clean_alpha_mask`) avant
+    d'etre retourne -- retour terrain : des artefacts en dents de scie
+    (bruit de matting, meches isolees) genaient autour du contour une fois
+    la photo decoupee a cette silhouette."""
     _set_u2net_home()
     from rembg import new_session, remove
 
     session = new_session(MODEL_NAME)
     mask = remove(image, session=session, only_mask=True)
-    return np.asarray(mask, dtype=np.float32) / 255.0
+    raw_mask = np.asarray(mask, dtype=np.float32) / 255.0
+    return clean_alpha_mask(raw_mask)
