@@ -28,7 +28,7 @@ caissons LightBox.
 - **Backlight Insert** : prototype expérimental, conservé dans le code mais
   non considéré comme validé physiquement.
 
-**Version actuelle : 0.4.2.** Ce README couvre l'installation et l'usage de
+**Version actuelle : 0.5.0.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 
@@ -305,6 +305,18 @@ Windows (`packaging/icons/lithoshape3d.icns` / `.ico`) sont régénérées
 depuis ce même SVG par `python packaging/generate_icons.py` (nécessite
 l'extra `pip install -e ".[packaging]"`) et référencées directement dans
 `packaging/lithoshape3d.spec` / `packaging/lithoshape3d_windows.spec`.
+
+Depuis la 0.5.0, l'application a une identité graphique dédiée ("Carbone +
+Lumière + Prisme") : thème sombre par défaut, thème clair au choix
+(menu **Thème**, préférence mémorisée), accents partagés entre les deux
+(`src/lithoshape3d/ui/theme.py`).
+
+## Licence
+
+Certaines fonctionnalités (l'export STL/3MF) nécessitent une licence
+valide. Le reste du logiciel (import, cadrage, zones, aperçu 3D) reste
+utilisable librement. Menu **Aide > Licence...** pour saisir la clé reçue
+à l'achat.
 
 ## État actuel
 
