@@ -162,6 +162,12 @@ def generate_lightbox_from_image(
     cap_mode: str | None = None,
     closing_radius_px: int | None = None,
     max_closing_radius_px: int | None = None,
+    connector_shape: str | None = None,
+    connector_width_mm: float = 9.5,
+    connector_height_mm: float | None = None,
+    connector_corner_radius_mm: float = 1.0,
+    connector_position_x_fraction: float = 0.5,
+    connector_position_y_fraction: float = 0.1,
 ) -> LightboxImageResult:
     """Genere un caisson lumineux vectoriel depuis une image (corps + fond +
     capot + DXF).
@@ -207,7 +213,17 @@ def generate_lightbox_from_image(
       - `"flat_two_color"` : DEUX capots plats complementaires (encre/fond)
         decoupes depuis le masque d'encre fin -- necessite
         `shape_mode="artwork_envelope"` (le masque d'encre n'existe que
-        dans ce mode)."""
+        dans ce mode).
+
+    `connector_shape` (`None` par defaut = aucune decoupe) :
+    `"rect"` ou `"circle"` (voir `vector_lightbox.CONNECTOR_SHAPE_*`) --
+    decoupe un trou traversant pour un connecteur d'alimentation
+    (USB-C, pogo pin...) dans le FOND INTEGRE du corps, jamais dans une
+    paroi laterale (voir `apply_back_panel_connector_cutout`).
+    `connector_width_mm`/`connector_height_mm` (mm, `height_mm` ignore en
+    cercle -- diametre = `connector_width_mm`), `connector_corner_radius_mm`
+    (rect uniquement), `connector_position_x/y_fraction` (0..1, fraction de
+    la bbox de la silhouette -- defaut bas-centre)."""
     from dataclasses import fields
 
     import trimesh
@@ -224,6 +240,7 @@ def generate_lightbox_from_image(
     from lithoshape3d.core.geometry.lightbox import build_lightbox_lithophane_face_mesh
     from lithoshape3d.core.geometry.vector_lightbox import (
         SHOULDER_DEPTH_MM,
+        apply_back_panel_connector_cutout,
         build_vector_lightbox_back_panel_mesh,
         build_vector_lightbox_body_mesh,
         vector_lightbox_cap_footprint,
@@ -377,6 +394,26 @@ def generate_lightbox_from_image(
         return result
     for warning in body_warnings:
         result.messages.append(("warning", warning))
+
+    if connector_shape is not None:
+        outer_min_x, outer_min_y, outer_max_x, outer_max_y = outer.bounds
+        center_x_mm = outer_min_x + connector_position_x_fraction * (outer_max_x - outer_min_x)
+        center_y_mm = outer_min_y + connector_position_y_fraction * (outer_max_y - outer_min_y)
+        try:
+            body_mesh = apply_back_panel_connector_cutout(
+                body_mesh,
+                outer,
+                back_thickness_mm,
+                shape=connector_shape,
+                width_mm=connector_width_mm,
+                height_mm=connector_height_mm,
+                corner_radius_mm=connector_corner_radius_mm,
+                center_x_mm=center_x_mm,
+                center_y_mm=center_y_mm,
+            )
+        except ValueError as exc:
+            result.messages.append(("error", f"decoupe connecteur : {exc}"))
+            return result
 
     body_validation = validate_mesh(body_mesh)
     if not body_validation.is_valid:

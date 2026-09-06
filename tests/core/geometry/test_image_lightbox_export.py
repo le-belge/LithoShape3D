@@ -345,3 +345,58 @@ def test_generate_lightbox_artwork_envelope_from_cherry_moon_svg_is_watertight(t
     cap_mesh = trimesh.load(cap_paths[0])
     assert body_mesh.is_watertight
     assert cap_mesh.is_watertight
+
+
+def test_generate_lightbox_from_image_with_usb_c_connector_cutout_stays_watertight(tmp_path):
+    """Retour utilisateur : "un emplacement pour fixer un port usb c ou un
+    connecteur pogo" -- verifie le branchement complet
+    parametres -> `apply_back_panel_connector_cutout` a travers le pipeline
+    reel (pas seulement le moteur geometrique isole, deja couvert par
+    `test_vector_lightbox_connector.py`)."""
+    image_path = _save_alpha_logo(tmp_path / "src")
+
+    result_without = generate_lightbox_from_image(
+        image_path, tmp_path / "out_no_connector", width_mm=60.0, depth_mm=20.0
+    )
+    assert not result_without.errors, result_without.errors
+
+    result = generate_lightbox_from_image(
+        image_path,
+        tmp_path / "out_connector",
+        width_mm=60.0,
+        depth_mm=20.0,
+        connector_shape="rect",
+        connector_width_mm=9.5,
+        connector_height_mm=3.8,
+        connector_corner_radius_mm=1.0,
+        connector_position_x_fraction=0.5,
+        connector_position_y_fraction=0.15,
+    )
+
+    assert not result.errors, result.errors
+    corps = [p for p in result.written if p.name.endswith("_corps.stl")]
+    assert len(corps) == 1
+    body_mesh = trimesh.load(corps[0])
+    assert body_mesh.is_watertight
+
+    corps_without = [p for p in result_without.written if p.name.endswith("_corps.stl")]
+    body_mesh_without = trimesh.load(corps_without[0])
+    assert body_mesh.volume < body_mesh_without.volume  # du volume a bien ete retire
+
+
+def test_generate_lightbox_from_image_connector_center_outside_silhouette_reports_error(tmp_path):
+    image_path = _save_alpha_logo(tmp_path / "src")
+
+    result = generate_lightbox_from_image(
+        image_path,
+        tmp_path / "out_connector_error",
+        width_mm=60.0,
+        depth_mm=20.0,
+        connector_shape="circle",
+        connector_width_mm=6.0,
+        connector_position_x_fraction=0.01,
+        connector_position_y_fraction=0.01,
+    )
+
+    assert result.errors
+    assert any("connecteur" in message for message in result.errors)

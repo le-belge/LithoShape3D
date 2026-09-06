@@ -28,7 +28,7 @@ caissons LightBox.
 - **Backlight Insert** : prototype expérimental, conservé dans le code mais
   non considéré comme validé physiquement.
 
-**Version actuelle : 0.6.0.** Ce README couvre l'installation et l'usage de
+**Version actuelle : 0.7.0.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 
@@ -180,6 +180,11 @@ Note : l'import SVG direct réutilise le rasteriseur QtSvg existant dans
 l'application. Il nécessite donc une installation avec l'extra UI/app
 (`pip install -e ".[app]"`). Sans QtSvg, il faut rasteriser le SVG en PNG
 avant d'utiliser la commande.
+
+Dans l'application (menu **Outils > LightBox depuis image...**), le
+caisson généré peut aussi recevoir une découpe pour un connecteur
+d'alimentation (USB-C ou pogo pin, presets ou dimensions personnalisées)
+dans son fond, pour alimenter des LED internes.
 
 ## Benchmark
 

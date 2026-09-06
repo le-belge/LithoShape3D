@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon, box
 
 from lithoshape3d.core.geometry.support import _from_manifold, _to_manifold
 
@@ -262,3 +262,91 @@ def vector_lightbox_cap_footprint(
     largeur supplementaire."""
     del shoulder_width_mm  # conserve pour compat signature, plus utilise (Option B)
     return outer.buffer(-(wall_thickness_mm + assembly_clearance_mm))
+
+
+CONNECTOR_SHAPE_RECT = "rect"
+CONNECTOR_SHAPE_CIRCLE = "circle"
+
+CONNECTOR_PRESET_USB_C = {
+    "shape": CONNECTOR_SHAPE_RECT,
+    "width_mm": 9.5,
+    "height_mm": 3.8,
+    "corner_radius_mm": 1.0,
+}
+"""Emprise generique d'un connecteur bulkhead USB-C (legerement genereuse
+par rapport aux cotes officiels du connecteur ~8.94x3.26mm) -- laisse un peu
+de jeu de montage, a ajuster par l'utilisateur selon le boitier reel de son
+connecteur (trop variable d'un fournisseur a l'autre pour une cote exacte)."""
+
+CONNECTOR_PRESET_POGO = {
+    "shape": CONNECTOR_SHAPE_CIRCLE,
+    "width_mm": 6.0,
+    "height_mm": None,
+    "corner_radius_mm": 0.0,
+}
+"""Diametre generique pour un petit bloc pogo-pin (2-4 broches) -- pas une
+cote constructeur, juste un passage suffisant pour la plupart des blocs
+courants, a ajuster si besoin (mode "Personnalise" cote UI)."""
+
+
+def apply_back_panel_connector_cutout(
+    body_mesh: trimesh.Trimesh,
+    outer: Polygon | MultiPolygon,
+    back_thickness_mm: float,
+    *,
+    shape: str,
+    width_mm: float,
+    height_mm: float | None = None,
+    corner_radius_mm: float = 0.0,
+    center_x_mm: float,
+    center_y_mm: float,
+) -> trimesh.Trimesh:
+    """Decoupe un trou traversant pour un connecteur dans le FOND INTEGRE du
+    corps (Z = 0..`back_thickness_mm`) -- seul endroit du corps qui reste
+    plein sur TOUTE l'empreinte de `outer`, quelle que soit l'epaisseur des
+    parois/de l'epaulement (voir `build_vector_lightbox_body_mesh` :
+    `cavity_bottom = max(back_thickness_mm, 0.0)`, la cavite ne mord jamais
+    sous cette cote) -- une decoupe ici ne risque donc jamais de percer une
+    paroi laterale par erreur, quelle que soit la position choisie a
+    l'interieur de la silhouette.
+
+    `shape` : `CONNECTOR_SHAPE_RECT` (rectangle a coins arrondis via
+    `corner_radius_mm`, `width_mm` x `height_mm`) ou `CONNECTOR_SHAPE_CIRCLE`
+    (cercle de diametre `width_mm`, `height_mm` ignore).
+
+    Leve `ValueError` si `(center_x_mm, center_y_mm)` tombe hors de `outer` :
+    mieux vaut echouer explicitement (meme discipline que
+    `real_edge_profile` dans `support.py`) qu'un caisson silencieusement
+    sans effet ou incoherent."""
+    if not outer.contains(Point(center_x_mm, center_y_mm)):
+        raise ValueError(
+            f"apply_back_panel_connector_cutout: le centre ({center_x_mm:.2f}, "
+            f"{center_y_mm:.2f}) tombe hors de la silhouette -- ajustez la position du connecteur."
+        )
+
+    if shape == CONNECTOR_SHAPE_RECT:
+        if height_mm is None:
+            raise ValueError("apply_back_panel_connector_cutout: height_mm requis pour shape='rect'.")
+        half_w, half_h = width_mm / 2.0, height_mm / 2.0
+        cutter_polygon = box(
+            center_x_mm - half_w, center_y_mm - half_h, center_x_mm + half_w, center_y_mm + half_h
+        )
+        if corner_radius_mm > 0.0:
+            cutter_polygon = cutter_polygon.buffer(corner_radius_mm).buffer(-corner_radius_mm)
+    elif shape == CONNECTOR_SHAPE_CIRCLE:
+        cutter_polygon = Point(center_x_mm, center_y_mm).buffer(width_mm / 2.0)
+    else:
+        raise ValueError(
+            f"apply_back_panel_connector_cutout: shape invalide {shape!r} "
+            f"(attendu {CONNECTOR_SHAPE_RECT!r} ou {CONNECTOR_SHAPE_CIRCLE!r})."
+        )
+
+    eps = min(0.05, back_thickness_mm * 0.1)
+    cutter_mesh = _extrude_geom(cutter_polygon, back_thickness_mm + 2 * eps, -eps)
+    if cutter_mesh is None:
+        raise ValueError("apply_back_panel_connector_cutout: decoupe degeneree (dimensions trop petites ?).")
+
+    result = _from_manifold(_to_manifold(body_mesh) - _to_manifold(cutter_mesh))
+    if result.is_empty:
+        raise ValueError("apply_back_panel_connector_cutout: la decoupe supprime tout le volume du corps.")
+    return result

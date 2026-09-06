@@ -42,6 +42,12 @@ from PySide6.QtWidgets import (
 )
 
 from lithoshape3d.core.geometry.image_lightbox_export import LightboxImageResult
+from lithoshape3d.core.geometry.vector_lightbox import (
+    CONNECTOR_PRESET_POGO,
+    CONNECTOR_PRESET_USB_C,
+    CONNECTOR_SHAPE_CIRCLE,
+    CONNECTOR_SHAPE_RECT,
+)
 from lithoshape3d.core.scene.models import ImageTransform
 from lithoshape3d.ui.mesh_preview_panel import MeshPreviewPanel
 
@@ -53,6 +59,8 @@ _CAP_MODE_LITHOPHANE = "lithophane"
 _CAP_MODE_FLAT_TWO_COLOR = "flat_two_color"
 _SHAPE_MODE_SILHOUETTE = "silhouette"
 _SHAPE_MODE_ARTWORK = "artwork_envelope"
+
+_CONNECTOR_NONE = "none"
 
 _ARTWORK_PREVIEW_BACKGROUND = (40, 40, 40)
 """Hors enveloppe (exterieur reel du futur caisson)."""
@@ -96,6 +104,16 @@ class _ImageLightboxWorker(QRunnable):
 class LightboxImageDialog(QDialog):
     """Dialogue modal pour generer un caisson lumineux vectoriel depuis une
     image, avec previsualisation de la silhouette extraite."""
+
+    @staticmethod
+    def _add_form_row(form: QFormLayout, label_text: str, widget: QWidget) -> QLabel:
+        """Ajoute une ligne au `QFormLayout` et retourne son `QLabel` --
+        necessaire pour pouvoir masquer/afficher label ET widget ensemble
+        (une ligne visible avec seulement le widget cache laisse un label
+        orphelin), utilise par `_on_connector_mode_changed`."""
+        label = QLabel(label_text)
+        form.addRow(label, widget)
+        return label
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -202,6 +220,50 @@ class LightboxImageDialog(QDialog):
         self.back_spin.setValue(1.2)
         self.back_spin.setSuffix(" mm")
         form.addRow("Epaisseur du fond", self.back_spin)
+
+        self.connector_combo = QComboBox()
+        self.connector_combo.addItem("Aucun", _CONNECTOR_NONE)
+        self.connector_combo.addItem("USB-C", CONNECTOR_SHAPE_RECT + "_usb_c")
+        self.connector_combo.addItem("Pogo pin", CONNECTOR_SHAPE_CIRCLE + "_pogo")
+        self.connector_combo.addItem("Personnalise (rectangle)", CONNECTOR_SHAPE_RECT)
+        self.connector_combo.addItem("Personnalise (cercle)", CONNECTOR_SHAPE_CIRCLE)
+        self.connector_combo.setToolTip(
+            "Decoupe un trou dans le fond du caisson pour un connecteur d'alimentation "
+            "(LED internes) -- USB-C et Pogo pin sont des tailles generiques, a ajuster "
+            "si besoin selon le connecteur reel."
+        )
+        self.connector_combo.currentIndexChanged.connect(self._on_connector_mode_changed)
+        form.addRow("Connecteur (fond)", self.connector_combo)
+
+        self.connector_width_spin = QDoubleSpinBox()
+        self.connector_width_spin.setRange(1.0, 100.0)
+        self.connector_width_spin.setSingleStep(0.1)
+        self.connector_width_spin.setValue(CONNECTOR_PRESET_USB_C["width_mm"])
+        self.connector_width_spin.setSuffix(" mm")
+        self.connector_width_label_row = self._add_form_row(form, "Largeur connecteur", self.connector_width_spin)
+
+        self.connector_height_spin = QDoubleSpinBox()
+        self.connector_height_spin.setRange(1.0, 100.0)
+        self.connector_height_spin.setSingleStep(0.1)
+        self.connector_height_spin.setValue(CONNECTOR_PRESET_USB_C["height_mm"])
+        self.connector_height_spin.setSuffix(" mm")
+        self.connector_height_label_row = self._add_form_row(form, "Hauteur connecteur", self.connector_height_spin)
+
+        self.connector_pos_x_spin = QDoubleSpinBox()
+        self.connector_pos_x_spin.setRange(0.0, 100.0)
+        self.connector_pos_x_spin.setSingleStep(1.0)
+        self.connector_pos_x_spin.setValue(50.0)
+        self.connector_pos_x_spin.setSuffix(" %")
+        self.connector_pos_x_row = self._add_form_row(form, "Position X connecteur", self.connector_pos_x_spin)
+
+        self.connector_pos_y_spin = QDoubleSpinBox()
+        self.connector_pos_y_spin.setRange(0.0, 100.0)
+        self.connector_pos_y_spin.setSingleStep(1.0)
+        self.connector_pos_y_spin.setValue(10.0)
+        self.connector_pos_y_spin.setSuffix(" %")
+        self.connector_pos_y_row = self._add_form_row(form, "Position Y connecteur", self.connector_pos_y_spin)
+
+        self._on_connector_mode_changed(0)
 
         self.cap_thickness_spin = QDoubleSpinBox()
         self.cap_thickness_spin.setRange(0.4, 20.0)
@@ -365,6 +427,42 @@ class LightboxImageDialog(QDialog):
         if directory:
             self._output_dir = directory
             self.output_label.setText(directory)
+
+    def _on_connector_mode_changed(self, _index: int) -> None:
+        mode = self.connector_combo.currentData()
+        is_none = mode == _CONNECTOR_NONE
+        is_circle = mode in (CONNECTOR_SHAPE_CIRCLE, CONNECTOR_SHAPE_CIRCLE + "_pogo")
+
+        if mode == CONNECTOR_SHAPE_RECT + "_usb_c":
+            self.connector_width_spin.setValue(CONNECTOR_PRESET_USB_C["width_mm"])
+            self.connector_height_spin.setValue(CONNECTOR_PRESET_USB_C["height_mm"])
+        elif mode == CONNECTOR_SHAPE_CIRCLE + "_pogo":
+            self.connector_width_spin.setValue(CONNECTOR_PRESET_POGO["width_mm"])
+
+        self.connector_width_label_row.setText("Diametre connecteur" if is_circle else "Largeur connecteur")
+        for label, widget in (
+            (self.connector_width_label_row, self.connector_width_spin),
+            (self.connector_pos_x_row, self.connector_pos_x_spin),
+            (self.connector_pos_y_row, self.connector_pos_y_spin),
+        ):
+            label.setVisible(not is_none)
+            widget.setVisible(not is_none)
+        self.connector_height_label_row.setVisible(not is_none and not is_circle)
+        self.connector_height_spin.setVisible(not is_none and not is_circle)
+
+    def _connector_generation_kwargs(self) -> dict:
+        mode = self.connector_combo.currentData()
+        if mode == _CONNECTOR_NONE:
+            return {"connector_shape": None}
+        shape = CONNECTOR_SHAPE_CIRCLE if mode in (CONNECTOR_SHAPE_CIRCLE, CONNECTOR_SHAPE_CIRCLE + "_pogo") else CONNECTOR_SHAPE_RECT
+        return {
+            "connector_shape": shape,
+            "connector_width_mm": self.connector_width_spin.value(),
+            "connector_height_mm": None if shape == CONNECTOR_SHAPE_CIRCLE else self.connector_height_spin.value(),
+            "connector_corner_radius_mm": 1.0 if shape == CONNECTOR_SHAPE_RECT else 0.0,
+            "connector_position_x_fraction": self.connector_pos_x_spin.value() / 100.0,
+            "connector_position_y_fraction": self.connector_pos_y_spin.value() / 100.0,
+        }
 
     def _on_cap_mode_changed(self, _index: int) -> None:
         cap_mode = self.cap_mode_combo.currentData()
@@ -666,6 +764,7 @@ class LightboxImageDialog(QDialog):
             cap_image_transform=cap_transform,
             shape_mode=shape_mode,
             cap_mode=cap_mode,
+            **self._connector_generation_kwargs(),
         )
         worker.signals.succeeded.connect(self._on_generation_succeeded)
         worker.signals.failed.connect(self._on_generation_failed)
