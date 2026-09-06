@@ -28,7 +28,7 @@ caissons LightBox.
 - **Backlight Insert** : prototype expérimental, conservé dans le code mais
   non considéré comme validé physiquement.
 
-**Version actuelle : 0.5.0.** Ce README couvre l'installation et l'usage de
+**Version actuelle : 0.6.0.** Ce README couvre l'installation et l'usage de
 base. Pour la vision produit, l'état réel détaillé fonction par fonction,
 la roadmap et les décisions techniques, voir `docs/` :
 
@@ -320,6 +320,25 @@ Certaines fonctionnalités (l'export STL/3MF) nécessitent une licence
 valide. Le reste du logiciel (import, cadrage, zones, aperçu 3D) reste
 utilisable librement. Menu **Aide > Licence...** pour saisir la clé reçue
 à l'achat.
+
+## Langue
+
+Depuis la 0.6.0, l'interface peut s'afficher en anglais (menu **Langue**,
+préférence mémorisée, s'applique au prochain lancement). Le français reste
+la langue source du code ; les traductions vivent dans
+`src/lithoshape3d/ui/translations/` — voir le
+[`README`](src/lithoshape3d/ui/translations/README.md) de ce dossier pour
+les régénérer après une modification de texte. Couverture actuelle :
+fenêtre principale, "À propos", licence — les dialogues plus profonds
+(cadrage, éditeur de masque, LightBox) restent en français pour l'instant.
+
+## Découper une pièce à la silhouette d'un sujet
+
+Bouton **Retirer le fond > Utiliser le détourage comme forme...** : détoure
+automatiquement le sujet et découpe directement la pièce à sa silhouette
+(sans le rectangle de fond), en un clic — raccourci équivalent à faire
+Retirer le fond puis Forme > Image avec le résultat, sans le passage
+manuel par un fichier intermédiaire.
 
 ## État actuel
 

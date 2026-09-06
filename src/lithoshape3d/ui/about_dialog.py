@@ -17,9 +17,6 @@ from PySide6.QtWidgets import (
 
 from lithoshape3d.ui.branding import BRAND_NAME, application_icon
 
-_TAGLINE = "Creation de lithophanies et reliefs 3D a partir d'images."
-_COPYRIGHT = "© 2026 LithoShape3D"
-
 
 class AboutDialog(QDialog):
     def __init__(self, parent=None) -> None:
@@ -27,7 +24,7 @@ class AboutDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         from lithoshape3d import __version__
 
-        self.setWindowTitle(f"A propos de {BRAND_NAME}")
+        self.setWindowTitle(self.tr("A propos de {}").format(BRAND_NAME))
         self.setFixedSize(360, 220)
 
         layout = QVBoxLayout(self)
@@ -55,13 +52,13 @@ class AboutDialog(QDialog):
         header.addStretch(1)
         layout.addLayout(header)
 
-        tagline = QLabel(_TAGLINE)
+        tagline = QLabel(self.tr("Creation de lithophanies et reliefs 3D a partir d'images."))
         tagline.setWordWrap(True)
         layout.addWidget(tagline)
 
         layout.addStretch(1)
 
-        copyright_label = QLabel(_COPYRIGHT)
+        copyright_label = QLabel(self.tr("© 2026 LithoShape3D"))
         copyright_label.setObjectName("aboutCopyright")
         layout.addWidget(copyright_label)
 

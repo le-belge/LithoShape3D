@@ -11,6 +11,7 @@ def run_app() -> int:
     from PySide6.QtWidgets import QApplication
 
     from lithoshape3d.ui.branding import application_icon
+    from lithoshape3d.ui.i18n import install_translator, stored_language
     from lithoshape3d.ui.main_window import MainWindow
     from lithoshape3d.ui.theme import apply_theme, stored_theme_is_dark
 
@@ -18,6 +19,8 @@ def run_app() -> int:
     logger.info("Lancement de LithoShape3D")
 
     app = QApplication.instance() or QApplication(sys.argv)
+    if not install_translator(app, stored_language()):
+        logger.warning("Traduction indisponible pour la langue choisie, repli sur le francais.")
     # Force Fusion : le style natif "macOS" (QMacStyle) laisse le materiau
     # de fond systeme (clair) transparaitre derriere certains QDialog au
     # lieu du fond QSS (#101820 en theme sombre) -- constate concretement

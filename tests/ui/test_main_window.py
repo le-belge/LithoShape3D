@@ -430,6 +430,56 @@ def test_remove_background_auto_downloaded_model_runs_directly_and_exports(
     assert main_window.remove_background_button.isEnabled()
 
 
+def test_remove_background_as_shape_button_enabled_with_image(main_window, tmp_path):
+    assert not main_window.remove_background_as_shape_button.isEnabled()
+    _load(main_window, tmp_path)
+    assert main_window.remove_background_as_shape_button.isEnabled()
+
+
+def test_remove_background_as_shape_shortcut_sets_shape_to_image_without_a_dialog(
+    main_window, tmp_path, monkeypatch, qapp
+):
+    """Reproduit le raccourci demande : detourer automatiquement puis
+    decouper directement la piece a la silhouette du sujet, sans passer
+    par une boite de dialogue d'export ni un reimport manuel."""
+    from PIL import Image
+
+    image_path = _load(main_window, tmp_path)
+    width, height = Image.open(image_path).size
+
+    monkeypatch.setattr("lithoshape3d.ai.background_removal.is_downloaded", lambda: True)
+
+    alpha_mask = np.zeros((height, width), dtype=np.float32)
+    alpha_mask[height // 2, width // 2] = 1.0
+    monkeypatch.setattr("lithoshape3d.ai.background_removal.remove_background", lambda image: alpha_mask)
+
+    save_dialog_called = []
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        "getSaveFileName",
+        lambda *a, **k: save_dialog_called.append(True) or ("", ""),
+    )
+
+    main_window._on_remove_background_as_shape_clicked()
+
+    expected_path = Path(image_path).with_name(f"{Path(image_path).stem}-detoure.png")
+    deadline = time.monotonic() + 10
+    while not expected_path.exists() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert expected_path.exists()  # ecrit directement, sans dialogue
+    assert not save_dialog_called
+    shape = main_window._project.scene.shape
+    assert shape.shape_type == ShapeType.IMAGE
+    assert shape.source_image_path == str(expected_path)
+    assert main_window.remove_background_as_shape_button.isEnabled()
+
+    shape_mask = main_window._current_shape_mask()
+    assert shape_mask is not None
+    assert shape_mask.any()  # une silhouette non vide a bien ete decoupee
+
+
 def test_remove_background_auto_offers_download_when_model_missing(
     main_window, tmp_path, monkeypatch
 ):

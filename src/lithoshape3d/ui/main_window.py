@@ -121,16 +121,7 @@ PRESETS: dict[str, dict[str, float]] = {
     },
 }
 
-_STATE_MESSAGES = {
-    AppState.NO_IMAGE: "Aucune image chargee.",
-    AppState.IMAGE_LOADED: "Image chargee. Reglez les parametres puis cliquez sur Generer.",
-    AppState.PARAMS_DIRTY: "Parametres modifies : le mesh affiche est perime.",
-    AppState.GENERATING: "Generation du mesh...",
-    AppState.MESH_READY: "Mesh genere. Vous pouvez l'exporter en STL.",
-    AppState.ERROR: "Erreur lors de la generation (voir le journal).",
-}
 
-_STALE_BANNER_TEXT = "Apercu a regenerer"
 
 _OUTSIDE_SHAPE_DARKEN_FACTOR = 0.25
 """Meme valeur que ui/cadrage_dialog.py:_OUTSIDE_DARKEN_FACTOR -- assombrit
@@ -253,7 +244,7 @@ class ImageZoomDialog(QDialog):
         self.view.setScene(scene)
         layout.addWidget(self.view)
 
-        hint = QLabel("Molette : zoomer -- glisser : deplacer")
+        hint = QLabel(self.tr("Molette : zoomer -- glisser : deplacer"))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(hint)
@@ -281,6 +272,7 @@ class MainWindow(QMainWindow):
         self._image_path: str | None = None
         self._locked_aspect_mm: tuple[float, float] | None = None
         self._auto_background_color_image = None
+        self._detour_target = "export"  # "export" (fichier) ou "shape" (raccourci Forme=Image)
         self._image_width_px = 0
         self._image_height_px = 0
         self._current_mesh = None
@@ -324,7 +316,7 @@ class MainWindow(QMainWindow):
         viewer_layout.setContentsMargins(0, 0, 0, 0)
         viewer_layout.setSpacing(4)
 
-        self.stale_banner = QLabel(_STALE_BANNER_TEXT)
+        self.stale_banner = QLabel(self.tr("Apercu a regenerer"))
         self.stale_banner.setObjectName("staleBanner")
         self.stale_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stale_banner.setVisible(False)
@@ -335,7 +327,7 @@ class MainWindow(QMainWindow):
         else:
             # Plotter off-screen (tests) : pas de widget Qt a integrer, la
             # logique du viewer reste testable via `self.scene_viewer`.
-            placeholder = QLabel("Viewer 3D (plotter off-screen, tests)")
+            placeholder = QLabel(self.tr("Viewer 3D (plotter off-screen, tests)"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             viewer_layout.addWidget(placeholder, 1)
 
@@ -407,7 +399,7 @@ class MainWindow(QMainWindow):
         brand_layout.addStretch(1)
         layout.addWidget(brand)
 
-        self.open_button = QPushButton("Ouvrir image...")
+        self.open_button = QPushButton(self.tr("Ouvrir image..."))
         self.open_button.clicked.connect(self._choose_image)
         layout.addWidget(self.open_button)
 
@@ -418,22 +410,34 @@ class MainWindow(QMainWindow):
         self.preview_label.arrow_pressed.connect(self._on_preview_arrow_key)
         layout.addWidget(self.preview_label, 1)
 
-        self.zoom_preview_button = QPushButton("Zoom apercu...")
+        self.zoom_preview_button = QPushButton(self.tr("Zoom apercu..."))
         self.zoom_preview_button.setEnabled(False)
         self.zoom_preview_button.clicked.connect(self._on_zoom_preview_clicked)
         layout.addWidget(self.zoom_preview_button)
 
-        self.remove_background_button = QPushButton("Retirer le fond...")
+        self.remove_background_button = QPushButton(self.tr("Retirer le fond..."))
         self.remove_background_button.setEnabled(False)
         self.remove_background_button.clicked.connect(self._on_remove_background_auto_clicked)
         layout.addWidget(self.remove_background_button)
 
-        self.remove_background_manual_button = QPushButton("Retirer le fond (precision manuelle)...")
+        self.remove_background_manual_button = QPushButton(self.tr("Retirer le fond (precision manuelle)..."))
         self.remove_background_manual_button.setEnabled(False)
         self.remove_background_manual_button.clicked.connect(self._on_remove_background_manual_clicked)
         if self._segmentation_backend is None:
-            self.remove_background_manual_button.setToolTip("Necessite macOS (SAM2)")
+            self.remove_background_manual_button.setToolTip(self.tr("Necessite macOS (SAM2)"))
         layout.addWidget(self.remove_background_manual_button)
+
+        self.remove_background_as_shape_button = QPushButton(self.tr("Utiliser le detourage comme forme..."))
+        self.remove_background_as_shape_button.setEnabled(False)
+        self.remove_background_as_shape_button.setToolTip(
+            self.tr(
+                "Detoure automatiquement le sujet et decoupe directement la piece a sa "
+                "silhouette (sans le fond) -- raccourci equivalent a Retirer le fond "
+                "puis Forme > Image avec le resultat."
+            )
+        )
+        self.remove_background_as_shape_button.clicked.connect(self._on_remove_background_as_shape_clicked)
+        layout.addWidget(self.remove_background_as_shape_button)
 
         self.filename_label = QLabel("")
         self.filename_label.setWordWrap(True)
@@ -442,7 +446,7 @@ class MainWindow(QMainWindow):
         self.dimensions_label = QLabel("")
         layout.addWidget(self.dimensions_label)
 
-        zones_group = QGroupBox("Zones")
+        zones_group = QGroupBox(self.tr("Zones"))
         zones_layout = QVBoxLayout(zones_group)
         zones_layout.setSpacing(6)
 
@@ -454,16 +458,16 @@ class MainWindow(QMainWindow):
         zones_layout.addWidget(self.zones_list)
 
         zones_buttons = QHBoxLayout()
-        self.new_zone_button = QPushButton("+ Zone")
+        self.new_zone_button = QPushButton(self.tr("+ Zone"))
         self.new_zone_button.clicked.connect(self._on_new_zone_clicked)
         zones_buttons.addWidget(self.new_zone_button)
 
-        self.delete_zone_button = QPushButton("Supprimer")
+        self.delete_zone_button = QPushButton(self.tr("Supprimer"))
         self.delete_zone_button.clicked.connect(self._on_delete_zone_clicked)
         zones_buttons.addWidget(self.delete_zone_button)
         zones_layout.addLayout(zones_buttons)
 
-        self.edit_mask_button = QPushButton("Editer le masque...")
+        self.edit_mask_button = QPushButton(self.tr("Editer le masque..."))
         self.edit_mask_button.clicked.connect(self._on_edit_mask_clicked)
         zones_layout.addWidget(self.edit_mask_button)
 
@@ -490,13 +494,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         self.preset_combo = QComboBox()
-        self.preset_combo.addItem("Personnalise")
+        self.preset_combo.addItem(self.tr("Personnalise"))
         for name in PRESETS:
             self.preset_combo.addItem(name)
         self.preset_combo.currentTextChanged.connect(self._apply_preset)
         layout.addWidget(self.preset_combo)
 
-        self.crop_to_locked_aspect_button = QPushButton("Recadrer pour ce format...")
+        self.crop_to_locked_aspect_button = QPushButton(self.tr("Recadrer pour ce format..."))
         self.crop_to_locked_aspect_button.setToolTip(
             "Rogne reellement la photo au ratio exact requis par ce preset -- "
             "sans ca, la hauteur suit le ratio brut de la photo importee."
@@ -505,97 +509,97 @@ class MainWindow(QMainWindow):
         self.crop_to_locked_aspect_button.clicked.connect(self._offer_crop_to_locked_aspect)
         layout.addWidget(self.crop_to_locked_aspect_button)
 
-        relief_group = QGroupBox("Relief")
+        relief_group = QGroupBox(self.tr("Relief"))
         relief_form = QFormLayout(relief_group)
         relief_form.setSpacing(8)
         self.relief_mode_combo = QComboBox()
-        self.relief_mode_combo.addItem("Lithophanie", ReliefMode.LITHOPHANE)
-        self.relief_mode_combo.addItem("Relief (amplitude)", ReliefMode.RELIEF)
-        self.relief_mode_combo.addItem("Solide (hauteur constante)", ReliefMode.SOLID)
-        relief_form.addRow("Type", self.relief_mode_combo)
+        self.relief_mode_combo.addItem(self.tr("Lithophanie"), ReliefMode.LITHOPHANE)
+        self.relief_mode_combo.addItem(self.tr("Relief (amplitude)"), ReliefMode.RELIEF)
+        self.relief_mode_combo.addItem(self.tr("Solide (hauteur constante)"), ReliefMode.SOLID)
+        relief_form.addRow(self.tr("Type"), self.relief_mode_combo)
         layout.addWidget(relief_group)
 
-        composition_group = QGroupBox("Composition")
+        composition_group = QGroupBox(self.tr("Composition"))
         self.composition_group = composition_group  # ancre de scroll : onglet "Geometrie / Backlight"
         composition_form = QFormLayout(composition_group)
         composition_form.setSpacing(8)
         self.composition_mode_combo = QComboBox()
-        self.composition_mode_combo.addItem("Base", CompositionMode.BASE)
-        self.composition_mode_combo.addItem("Ajouter", CompositionMode.ADD)
-        self.composition_mode_combo.addItem("Remplacer", CompositionMode.REPLACE)
-        composition_form.addRow("Mode", self.composition_mode_combo)
+        self.composition_mode_combo.addItem(self.tr("Base"), CompositionMode.BASE)
+        self.composition_mode_combo.addItem(self.tr("Ajouter"), CompositionMode.ADD)
+        self.composition_mode_combo.addItem(self.tr("Remplacer"), CompositionMode.REPLACE)
+        composition_form.addRow(self.tr("Mode"), self.composition_mode_combo)
         layout.addWidget(composition_group)
 
-        material_group = QGroupBox("Materiau (impression)")
+        material_group = QGroupBox(self.tr("Materiau (impression)"))
         material_form = QFormLayout(material_group)
         material_form.setSpacing(8)
 
         self.material_name_edit = QLineEdit()
-        self.material_name_edit.setPlaceholderText("ex. Blanc, Rose...")
-        material_form.addRow("Nom", self.material_name_edit)
+        self.material_name_edit.setPlaceholderText(self.tr("ex. Blanc, Rose..."))
+        material_form.addRow(self.tr("Nom"), self.material_name_edit)
 
         self.material_color_button = QPushButton()
         self.material_color_button.setFixedWidth(60)
         self.material_color_button.clicked.connect(self._on_pick_material_color)
-        material_form.addRow("Couleur", self.material_color_button)
+        material_form.addRow(self.tr("Couleur"), self.material_color_button)
 
         self.material_filament_combo = QComboBox()
-        self.material_filament_combo.addItem("(non specifie)", None)
+        self.material_filament_combo.addItem(self.tr("(non specifie)"), None)
         for filament_type in ("PLA", "PETG", "TPU", "Autre"):
             self.material_filament_combo.addItem(filament_type, filament_type)
-        material_form.addRow("Type", self.material_filament_combo)
+        material_form.addRow(self.tr("Type"), self.material_filament_combo)
 
         self.material_slot_spin = QSpinBox()
         self.material_slot_spin.setRange(-1, 15)
         self.material_slot_spin.setSpecialValueText("Aucun")
-        material_form.addRow("Slot filament", self.material_slot_spin)
+        material_form.addRow(self.tr("Slot filament"), self.material_slot_spin)
 
         layout.addWidget(material_group)
 
-        color_strategy_group = QGroupBox("Strategie couleur")
+        color_strategy_group = QGroupBox(self.tr("Strategie couleur"))
         color_strategy_form = QFormLayout(color_strategy_group)
         color_strategy_form.setSpacing(8)
 
         self.color_strategy_combo = QComboBox()
-        self.color_strategy_combo.addItem("Materiau seul", ColorStrategy.MATERIAL_ONLY)
-        self.color_strategy_combo.addItem("Insert retro-eclaire", ColorStrategy.BACKLIGHT_INSERT)
+        self.color_strategy_combo.addItem(self.tr("Materiau seul"), ColorStrategy.MATERIAL_ONLY)
+        self.color_strategy_combo.addItem(self.tr("Insert retro-eclaire"), ColorStrategy.BACKLIGHT_INSERT)
         self.color_strategy_combo.setToolTip(
             "Materiau seul : assigner un materiau/une couleur a cette zone ne "
             "change jamais la geometrie deja composee.\n"
             "Insert retro-eclaire : conserve une fine peau blanche en facade et "
             "genere un insert colore independant a placer derriere."
         )
-        color_strategy_form.addRow("Mode", self.color_strategy_combo)
+        color_strategy_form.addRow(self.tr("Mode"), self.color_strategy_combo)
 
         self.backlight_skin_spin = QDoubleSpinBox()
         self.backlight_skin_spin.setRange(0.05, 2.0)
         self.backlight_skin_spin.setSingleStep(0.05)
         self.backlight_skin_spin.setSuffix(" mm")
         self.backlight_skin_spin.setValue(BacklightInsertParams().white_skin_thickness_mm)
-        self.backlight_skin_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
-        color_strategy_form.addRow("Epaisseur peau blanche", self.backlight_skin_spin)
+        self.backlight_skin_spin.setToolTip(self.tr("Valeur experimentale, a valider par de vraies impressions."))
+        color_strategy_form.addRow(self.tr("Epaisseur peau blanche"), self.backlight_skin_spin)
 
         self.backlight_insert_thickness_spin = QDoubleSpinBox()
         self.backlight_insert_thickness_spin.setRange(0.1, 2.0)
         self.backlight_insert_thickness_spin.setSingleStep(0.05)
         self.backlight_insert_thickness_spin.setSuffix(" mm")
         self.backlight_insert_thickness_spin.setValue(0.60)
-        self.backlight_insert_thickness_spin.setToolTip("Valeur experimentale, a valider par de vraies impressions.")
-        color_strategy_form.addRow("Epaisseur insert", self.backlight_insert_thickness_spin)
+        self.backlight_insert_thickness_spin.setToolTip(self.tr("Valeur experimentale, a valider par de vraies impressions."))
+        color_strategy_form.addRow(self.tr("Epaisseur insert"), self.backlight_insert_thickness_spin)
 
         self.backlight_clearance_combo = QComboBox()
-        self.backlight_clearance_combo.addItem("Serre (0.10 mm)", 0.10)
-        self.backlight_clearance_combo.addItem("Standard (0.20 mm)", 0.20)
-        self.backlight_clearance_combo.addItem("Facile (0.30 mm)", 0.30)
+        self.backlight_clearance_combo.addItem(self.tr("Serre (0.10 mm)"), 0.10)
+        self.backlight_clearance_combo.addItem(self.tr("Standard (0.20 mm)"), 0.20)
+        self.backlight_clearance_combo.addItem(self.tr("Facile (0.30 mm)"), 0.30)
         self.backlight_clearance_combo.setCurrentIndex(1)
         self.backlight_clearance_combo.setToolTip(
             "Jeu lateral entre l'insert et la cavite -- valeurs experimentales."
         )
-        color_strategy_form.addRow("Jeu XY", self.backlight_clearance_combo)
+        color_strategy_form.addRow(self.tr("Jeu XY"), self.backlight_clearance_combo)
 
         layout.addWidget(color_strategy_group)
 
-        geometry_group = QGroupBox("Geometrie")
+        geometry_group = QGroupBox(self.tr("Geometrie"))
         geometry_form = QFormLayout(geometry_group)
         geometry_form.setSpacing(8)
 
@@ -603,79 +607,79 @@ class MainWindow(QMainWindow):
         self.width_spin.setRange(5.0, 500.0)
         self.width_spin.setSuffix(" mm")
         self.width_spin.setValue(100.0)
-        geometry_form.addRow("Largeur", self.width_spin)
+        geometry_form.addRow(self.tr("Largeur"), self.width_spin)
 
-        self.height_display = QLabel("- mm")
-        geometry_form.addRow("Hauteur (ratio verrouille)", self.height_display)
+        self.height_display = QLabel(self.tr("- mm"))
+        geometry_form.addRow(self.tr("Hauteur (ratio verrouille)"), self.height_display)
 
         self.min_thickness_spin = QDoubleSpinBox()
         self.min_thickness_spin.setRange(0.1, 10.0)
         self.min_thickness_spin.setSingleStep(0.1)
         self.min_thickness_spin.setSuffix(" mm")
         self.min_thickness_spin.setValue(0.8)
-        geometry_form.addRow("Epaisseur min", self.min_thickness_spin)
+        geometry_form.addRow(self.tr("Epaisseur min"), self.min_thickness_spin)
 
         self.max_thickness_spin = QDoubleSpinBox()
         self.max_thickness_spin.setRange(0.2, 15.0)
         self.max_thickness_spin.setSingleStep(0.1)
         self.max_thickness_spin.setSuffix(" mm")
         self.max_thickness_spin.setValue(3.0)
-        geometry_form.addRow("Epaisseur max", self.max_thickness_spin)
+        geometry_form.addRow(self.tr("Epaisseur max"), self.max_thickness_spin)
 
         self.resolution_spin = QDoubleSpinBox()
         self.resolution_spin.setRange(0.05, 2.0)
         self.resolution_spin.setSingleStep(0.05)
         self.resolution_spin.setSuffix(" mm/px")
         self.resolution_spin.setValue(0.3)
-        geometry_form.addRow("Resolution", self.resolution_spin)
+        geometry_form.addRow(self.tr("Resolution"), self.resolution_spin)
 
         layout.addWidget(geometry_group)
 
-        image_group = QGroupBox("Image")
+        image_group = QGroupBox(self.tr("Image"))
         image_form = QFormLayout(image_group)
         image_form.setSpacing(8)
 
-        self.invert_checkbox = QCheckBox("Inverser (clair = epais)")
+        self.invert_checkbox = QCheckBox(self.tr("Inverser (clair = epais)"))
         image_form.addRow(self.invert_checkbox)
 
         self.contrast_spin = QDoubleSpinBox()
         self.contrast_spin.setRange(0.1, 3.0)
         self.contrast_spin.setSingleStep(0.05)
         self.contrast_spin.setValue(1.0)
-        image_form.addRow("Contraste", self.contrast_spin)
+        image_form.addRow(self.tr("Contraste"), self.contrast_spin)
 
         self.brightness_spin = QDoubleSpinBox()
         self.brightness_spin.setRange(-0.5, 0.5)
         self.brightness_spin.setSingleStep(0.02)
         self.brightness_spin.setValue(0.0)
-        image_form.addRow("Luminosite", self.brightness_spin)
+        image_form.addRow(self.tr("Luminosite"), self.brightness_spin)
 
         layout.addWidget(image_group)
 
-        shape_group = QGroupBox("Forme")
+        shape_group = QGroupBox(self.tr("Forme"))
         shape_layout = QVBoxLayout(shape_group)
         shape_layout.setSpacing(8)
         shape_form = QFormLayout()
         shape_form.setSpacing(8)
 
         self.shape_type_combo = QComboBox()
-        self.shape_type_combo.addItem("Rectangle", ShapeType.RECTANGLE)
-        self.shape_type_combo.addItem("Cercle", ShapeType.CIRCLE)
-        self.shape_type_combo.addItem("Ovale", ShapeType.OVAL)
-        self.shape_type_combo.addItem("Coeur", ShapeType.HEART)
-        self.shape_type_combo.addItem("Etoile", ShapeType.STAR)
-        self.shape_type_combo.addItem("Texte", ShapeType.TEXT)
-        self.shape_type_combo.addItem("SVG", ShapeType.SVG)
-        self.shape_type_combo.addItem("Image", ShapeType.IMAGE)
+        self.shape_type_combo.addItem(self.tr("Rectangle"), ShapeType.RECTANGLE)
+        self.shape_type_combo.addItem(self.tr("Cercle"), ShapeType.CIRCLE)
+        self.shape_type_combo.addItem(self.tr("Ovale"), ShapeType.OVAL)
+        self.shape_type_combo.addItem(self.tr("Coeur"), ShapeType.HEART)
+        self.shape_type_combo.addItem(self.tr("Etoile"), ShapeType.STAR)
+        self.shape_type_combo.addItem(self.tr("Texte"), ShapeType.TEXT)
+        self.shape_type_combo.addItem(self.tr("SVG"), ShapeType.SVG)
+        self.shape_type_combo.addItem(self.tr("Image"), ShapeType.IMAGE)
         self.shape_type_combo.currentIndexChanged.connect(self._on_shape_changed)
-        shape_form.addRow("Type", self.shape_type_combo)
+        shape_form.addRow(self.tr("Type"), self.shape_type_combo)
 
         self.shape_text_edit = QLineEdit()
-        self.shape_text_edit.setPlaceholderText("ex. M, LOVE, 2026...")
+        self.shape_text_edit.setPlaceholderText(self.tr("ex. M, LOVE, 2026..."))
         self.shape_text_edit.editingFinished.connect(self._on_shape_changed)
-        shape_form.addRow("Texte", self.shape_text_edit)
+        shape_form.addRow(self.tr("Texte"), self.shape_text_edit)
 
-        self.shape_bold_checkbox = QCheckBox("Gras")
+        self.shape_bold_checkbox = QCheckBox(self.tr("Gras"))
         self.shape_bold_checkbox.toggled.connect(self._on_shape_changed)
         shape_form.addRow("", self.shape_bold_checkbox)
 
@@ -684,7 +688,7 @@ class MainWindow(QMainWindow):
         self.shape_border_spin.setSingleStep(0.5)
         self.shape_border_spin.setSuffix(" mm")
         self.shape_border_spin.valueChanged.connect(self._on_shape_changed)
-        shape_form.addRow("Bordure", self.shape_border_spin)
+        shape_form.addRow(self.tr("Bordure"), self.shape_border_spin)
 
         self.shape_scale_spin = QDoubleSpinBox()
         self.shape_scale_spin.setRange(10.0, 300.0)
@@ -692,21 +696,21 @@ class MainWindow(QMainWindow):
         self.shape_scale_spin.setSuffix(" %")
         self.shape_scale_spin.setValue(100.0)
         self.shape_scale_spin.valueChanged.connect(self._on_shape_changed)
-        shape_form.addRow("Taille", self.shape_scale_spin)
+        shape_form.addRow(self.tr("Taille"), self.shape_scale_spin)
 
         self.shape_offset_x_spin = QDoubleSpinBox()
         self.shape_offset_x_spin.setRange(-50.0, 50.0)
         self.shape_offset_x_spin.setSingleStep(1.0)
         self.shape_offset_x_spin.setSuffix(" %")
         self.shape_offset_x_spin.valueChanged.connect(self._on_shape_changed)
-        shape_form.addRow("Position X", self.shape_offset_x_spin)
+        shape_form.addRow(self.tr("Position X"), self.shape_offset_x_spin)
 
         self.shape_offset_y_spin = QDoubleSpinBox()
         self.shape_offset_y_spin.setRange(-50.0, 50.0)
         self.shape_offset_y_spin.setSingleStep(1.0)
         self.shape_offset_y_spin.setSuffix(" %")
         self.shape_offset_y_spin.valueChanged.connect(self._on_shape_changed)
-        shape_form.addRow("Position Y", self.shape_offset_y_spin)
+        shape_form.addRow(self.tr("Position Y"), self.shape_offset_y_spin)
 
         self.shape_offset_hint_label = QLabel(
             "Astuce : cliquez sur l'apercu photo puis utilisez les fleches du clavier."
@@ -716,7 +720,7 @@ class MainWindow(QMainWindow):
 
         shape_layout.addLayout(shape_form)
 
-        self.shape_import_button = QPushButton("Importer SVG/image...")
+        self.shape_import_button = QPushButton(self.tr("Importer SVG/image..."))
         self.shape_import_button.clicked.connect(self._on_import_shape_source_clicked)
         shape_layout.addWidget(self.shape_import_button)
 
@@ -728,11 +732,11 @@ class MainWindow(QMainWindow):
         self.shape_info_label.setWordWrap(True)
         shape_layout.addWidget(self.shape_info_label)
 
-        self.cadrage_button = QPushButton("Cadrer la photo...")
+        self.cadrage_button = QPushButton(self.tr("Cadrer la photo..."))
         self.cadrage_button.clicked.connect(self._on_cadrage_clicked)
         shape_layout.addWidget(self.cadrage_button)
 
-        self.shape_to_backlight_button = QPushButton("Envoyer vers une zone Backlight...")
+        self.shape_to_backlight_button = QPushButton(self.tr("Envoyer vers une zone Backlight..."))
         self.shape_to_backlight_button.setToolTip(
             "Cree une nouvelle zone Insert retro-eclaire a partir du texte positionne "
             "(couleur rouge par defaut, modifiable) -- la Forme redevient un rectangle."
@@ -742,39 +746,39 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(shape_group)
 
-        support_group = QGroupBox("Support d'impression")
+        support_group = QGroupBox(self.tr("Support d'impression"))
         support_form = QFormLayout(support_group)
         support_form.setSpacing(8)
 
         self.support_type_combo = QComboBox()
-        self.support_type_combo.addItem("Aucun", SupportType.NONE)
-        self.support_type_combo.addItem("Pied plat", SupportType.FLAT)
-        self.support_type_combo.addItem("Pied renforce", SupportType.REINFORCED)
-        support_form.addRow("Type", self.support_type_combo)
+        self.support_type_combo.addItem(self.tr("Aucun"), SupportType.NONE)
+        self.support_type_combo.addItem(self.tr("Pied plat"), SupportType.FLAT)
+        self.support_type_combo.addItem(self.tr("Pied renforce"), SupportType.REINFORCED)
+        support_form.addRow(self.tr("Type"), self.support_type_combo)
 
         self.support_height_spin = QDoubleSpinBox()
         self.support_height_spin.setRange(2.0, 60.0)
         self.support_height_spin.setSuffix(" mm")
         self.support_height_spin.setValue(8.0)
-        support_form.addRow("Hauteur du pied", self.support_height_spin)
+        support_form.addRow(self.tr("Hauteur du pied"), self.support_height_spin)
 
         self.support_depth_spin = QDoubleSpinBox()
         self.support_depth_spin.setRange(5.0, 100.0)
         self.support_depth_spin.setSuffix(" mm")
         self.support_depth_spin.setValue(25.0)
-        support_form.addRow("Profondeur du pied", self.support_depth_spin)
+        support_form.addRow(self.tr("Profondeur du pied"), self.support_depth_spin)
 
         self.support_overhang_left_spin = QDoubleSpinBox()
         self.support_overhang_left_spin.setRange(0.0, 50.0)
         self.support_overhang_left_spin.setSuffix(" mm")
         self.support_overhang_left_spin.setValue(5.0)
-        support_form.addRow("Debord gauche", self.support_overhang_left_spin)
+        support_form.addRow(self.tr("Debord gauche"), self.support_overhang_left_spin)
 
         self.support_overhang_right_spin = QDoubleSpinBox()
         self.support_overhang_right_spin.setRange(0.0, 50.0)
         self.support_overhang_right_spin.setSuffix(" mm")
         self.support_overhang_right_spin.setValue(5.0)
-        support_form.addRow("Debord droit", self.support_overhang_right_spin)
+        support_form.addRow(self.tr("Debord droit"), self.support_overhang_right_spin)
 
         self.support_side_stabilizers_checkbox = QCheckBox(
             "Stabilisateurs lateraux (detachables, aide a l'impression debout)"
@@ -788,16 +792,16 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(support_group)
 
-        display_group = QGroupBox("Affichage")
+        display_group = QGroupBox(self.tr("Affichage"))
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(8)
 
         view_scope_layout = QHBoxLayout()
         view_scope_layout.setSpacing(6)
-        self.view_zone_button = QPushButton("Zone active")
+        self.view_zone_button = QPushButton(self.tr("Zone active"))
         self.view_zone_button.setCheckable(True)
         self.view_zone_button.setChecked(True)
-        self.view_composition_button = QPushButton("Composition")
+        self.view_composition_button = QPushButton(self.tr("Composition"))
         self.view_composition_button.setCheckable(True)
         self.view_scope_group = QButtonGroup(self)
         self.view_scope_group.setExclusive(True)
@@ -808,23 +812,23 @@ class MainWindow(QMainWindow):
         display_layout.addLayout(view_scope_layout)
 
         self.display_mode_combo = QComboBox()
-        self.display_mode_combo.addItem("Surface", DisplayMode.SURFACE)
-        self.display_mode_combo.addItem("Fil de fer", DisplayMode.WIREFRAME)
-        self.display_mode_combo.addItem("Surface + aretes", DisplayMode.SURFACE_WITH_EDGES)
-        self.display_mode_combo.addItem("Apercu retro-eclaire", DisplayMode.BACKLIGHT_PREVIEW)
-        self.display_mode_combo.addItem("Materiaux", DisplayMode.MATERIALS)
-        self.display_mode_combo.addItem("Backlight couleur", DisplayMode.BACKLIGHT_INSERT_PREVIEW)
+        self.display_mode_combo.addItem(self.tr("Surface"), DisplayMode.SURFACE)
+        self.display_mode_combo.addItem(self.tr("Fil de fer"), DisplayMode.WIREFRAME)
+        self.display_mode_combo.addItem(self.tr("Surface + aretes"), DisplayMode.SURFACE_WITH_EDGES)
+        self.display_mode_combo.addItem(self.tr("Apercu retro-eclaire"), DisplayMode.BACKLIGHT_PREVIEW)
+        self.display_mode_combo.addItem(self.tr("Materiaux"), DisplayMode.MATERIALS)
+        self.display_mode_combo.addItem(self.tr("Backlight couleur"), DisplayMode.BACKLIGHT_INSERT_PREVIEW)
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.display_mode_combo)
 
         views_layout = QHBoxLayout()
         views_layout.setSpacing(6)
-        self.view_front_button = QPushButton("Face")
+        self.view_front_button = QPushButton(self.tr("Face"))
         self.view_front_button.clicked.connect(lambda: self.scene_viewer.view_front())
-        self.view_iso_button = QPushButton("Iso")
+        self.view_iso_button = QPushButton(self.tr("Iso"))
         self.view_iso_button.clicked.connect(lambda: self.scene_viewer.view_isometric())
-        self.view_reset_button = QPushButton("Reset")
-        self.view_reset_button.setToolTip("Reinitialiser la camera")
+        self.view_reset_button = QPushButton(self.tr("Reset"))
+        self.view_reset_button.setToolTip(self.tr("Reinitialiser la camera"))
         self.view_reset_button.clicked.connect(lambda: self.scene_viewer.reset_camera())
         for button in (self.view_front_button, self.view_iso_button, self.view_reset_button):
             views_layout.addWidget(button)
@@ -882,20 +886,20 @@ class MainWindow(QMainWindow):
         bar = QWidget()
         layout = QHBoxLayout(bar)
 
-        self.generate_button = QPushButton("Generer")
+        self.generate_button = QPushButton(self.tr("Generer"))
         self.generate_button.setObjectName("generateButton")
         self.generate_button.clicked.connect(self._on_generate_clicked)
         layout.addWidget(self.generate_button)
 
-        self.export_button = QPushButton("Exporter STL...")
+        self.export_button = QPushButton(self.tr("Exporter STL..."))
         self.export_button.clicked.connect(self._on_export_clicked)
         layout.addWidget(self.export_button)
 
-        self.export_multi_material_button = QPushButton("Exporter multi-materiaux...")
+        self.export_multi_material_button = QPushButton(self.tr("Exporter multi-materiaux..."))
         self.export_multi_material_button.clicked.connect(self._on_export_multi_material_clicked)
         layout.addWidget(self.export_multi_material_button)
 
-        self.reset_button = QPushButton("Reset parametres")
+        self.reset_button = QPushButton(self.tr("Reset parametres"))
         self.reset_button.clicked.connect(self._on_reset_clicked)
         layout.addWidget(self.reset_button)
 
@@ -903,71 +907,72 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("Fichier")
+        file_menu = self.menuBar().addMenu(self.tr("Fichier"))
 
-        new_project_action = QAction("Nouveau projet", self)
+        new_project_action = QAction(self.tr("Nouveau projet"), self)
         new_project_action.setShortcut(QKeySequence.StandardKey.New)
         new_project_action.triggered.connect(self._on_new_project)
         file_menu.addAction(new_project_action)
 
-        open_project_action = QAction("Ouvrir projet...", self)
+        open_project_action = QAction(self.tr("Ouvrir projet..."), self)
         open_project_action.triggered.connect(self._on_open_project)
         file_menu.addAction(open_project_action)
 
-        save_project_action = QAction("Enregistrer", self)
+        save_project_action = QAction(self.tr("Enregistrer"), self)
         save_project_action.setShortcut(QKeySequence.StandardKey.Save)
         save_project_action.triggered.connect(self._on_save_project)
         file_menu.addAction(save_project_action)
 
-        save_project_as_action = QAction("Enregistrer sous...", self)
+        save_project_as_action = QAction(self.tr("Enregistrer sous..."), self)
         save_project_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_project_as_action.triggered.connect(self._on_save_project_as)
         file_menu.addAction(save_project_as_action)
 
         file_menu.addSeparator()
 
-        self.open_action = QAction("Ouvrir image", self)
+        self.open_action = QAction(self.tr("Ouvrir image"), self)
         self.open_action.setShortcut(QKeySequence.StandardKey.Open)
         self.open_action.triggered.connect(self._choose_image)
         file_menu.addAction(self.open_action)
 
-        self.generate_action = QAction("Generer", self)
+        self.generate_action = QAction(self.tr("Generer"), self)
         self.generate_action.setShortcut(QKeySequence("Ctrl+R"))
         self.generate_action.triggered.connect(self._on_generate_clicked)
         file_menu.addAction(self.generate_action)
 
-        self.export_action = QAction("Exporter STL", self)
+        self.export_action = QAction(self.tr("Exporter STL"), self)
         self.export_action.setShortcut(QKeySequence("Ctrl+E"))
         self.export_action.triggered.connect(self._on_export_clicked)
         file_menu.addAction(self.export_action)
 
         file_menu.addSeparator()
-        quit_action = QAction("Quitter", self)
+        quit_action = QAction(self.tr("Quitter"), self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-        view_menu = self.menuBar().addMenu("Vue")
-        view_menu.addAction("Face", lambda: self.scene_viewer.view_front())
-        view_menu.addAction("Isometrique", lambda: self.scene_viewer.view_isometric())
-        view_menu.addAction("Reset camera", lambda: self.scene_viewer.reset_camera())
+        view_menu = self.menuBar().addMenu(self.tr("Vue"))
+        view_menu.addAction(self.tr("Face"), lambda: self.scene_viewer.view_front())
+        view_menu.addAction(self.tr("Isometrique"), lambda: self.scene_viewer.view_isometric())
+        view_menu.addAction(self.tr("Reset camera"), lambda: self.scene_viewer.reset_camera())
 
         self._build_theme_menu()
+        self._build_language_menu()
 
-        tools_menu = self.menuBar().addMenu("Outils")
-        lightbox_letters_action = QAction("LightBox Letters...", self)
+        tools_menu = self.menuBar().addMenu(self.tr("Outils"))
+        lightbox_letters_action = QAction(self.tr("LightBox Letters..."), self)
         lightbox_letters_action.triggered.connect(self._open_lightbox_letters_dialog)
         tools_menu.addAction(lightbox_letters_action)
 
-        lightbox_image_action = QAction("LightBox depuis image...", self)
+        lightbox_image_action = QAction(self.tr("LightBox depuis image..."), self)
         lightbox_image_action.triggered.connect(self._open_lightbox_image_dialog)
         tools_menu.addAction(lightbox_image_action)
 
-        help_menu = self.menuBar().addMenu("Aide")
-        license_action = QAction("Licence...", self)
+        help_menu = self.menuBar().addMenu(self.tr("Aide"))
+        license_action = QAction(self.tr("Licence..."), self)
         license_action.triggered.connect(self._open_license_dialog)
         help_menu.addAction(license_action)
-        about_action = QAction("A propos", self)
+        about_action = QAction(self.tr("A propos"), self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
@@ -982,8 +987,8 @@ class MainWindow(QMainWindow):
 
         if not seller_private_key_hex():
             return
-        seller_menu = self.menuBar().addMenu("Vendeur")
-        issue_license_action = QAction("Generer une licence...", self)
+        seller_menu = self.menuBar().addMenu(self.tr("Vendeur"))
+        issue_license_action = QAction(self.tr("Generer une licence..."), self)
         issue_license_action.triggered.connect(self._open_issue_license_dialog)
         seller_menu.addAction(issue_license_action)
 
@@ -1021,7 +1026,7 @@ class MainWindow(QMainWindow):
         self._workflow_step_buttons: list[QPushButton] = []
         for index, name in enumerate(self._WORKFLOW_STEPS):
             if index > 0:
-                arrow = QLabel("›")  # "›"
+                arrow = QLabel(self.tr("›"))  # "›"
                 arrow.setObjectName("workflowArrow")
                 layout.addWidget(arrow)
             button = QPushButton(name)
@@ -1078,9 +1083,20 @@ class MainWindow(QMainWindow):
             button.style().unpolish(button)
             button.style().polish(button)
 
+    def _state_message(self, state: AppState) -> str:
+        messages = {
+            AppState.NO_IMAGE: self.tr("Aucune image chargee."),
+            AppState.IMAGE_LOADED: self.tr("Image chargee. Reglez les parametres puis cliquez sur Generer."),
+            AppState.PARAMS_DIRTY: self.tr("Parametres modifies : le mesh affiche est perime."),
+            AppState.GENERATING: self.tr("Generation du mesh..."),
+            AppState.MESH_READY: self.tr("Mesh genere. Vous pouvez l'exporter en STL."),
+            AppState.ERROR: self.tr("Erreur lors de la generation (voir le journal)."),
+        }
+        return messages[state]
+
     def _set_state(self, state: AppState) -> None:
         self._state = state
-        self.statusBar().showMessage(_STATE_MESSAGES[state])
+        self.statusBar().showMessage(self._state_message(state))
         self.stale_banner.setVisible(state is AppState.PARAMS_DIRTY)
         self._update_workflow_indicator(state)
 
@@ -1105,6 +1121,7 @@ class MainWindow(QMainWindow):
         self.remove_background_manual_button.setEnabled(
             has_image and not generating and self._segmentation_backend is not None
         )
+        self.remove_background_as_shape_button.setEnabled(has_image and not generating)
         self.delete_zone_button.setEnabled(not generating and self._active_zone() is not None)
         self.edit_mask_button.setEnabled(not generating and self._active_zone() is not None)
         self.zones_list.setEnabled(not generating)
@@ -1138,7 +1155,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def _choose_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choisir une image", "", "Images (*.png *.jpg *.jpeg)"
+            self, self.tr("Choisir une image"), "", self.tr("Images (*.png *.jpg *.jpeg)")
         )
         if path:
             self._load_image(path)
@@ -1148,7 +1165,7 @@ class MainWindow(QMainWindow):
             width_px, height_px = image_size(path)
         except (OSError, ValueError) as exc:
             logger.exception("Impossible de lire l'image")
-            QMessageBox.critical(self, "LithoShape3D", f"Impossible de lire l'image :\n{exc}")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Impossible de lire l'image :\n") + str(exc))
             return
 
         self._image_path = path
@@ -1722,12 +1739,11 @@ class MainWindow(QMainWindow):
 
     def _on_import_shape_source_clicked(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(
-            self, "Importer une forme", "", "SVG (*.svg);;Images (*.png *.jpg *.jpeg *.bmp)"
+            self, self.tr("Importer une forme"), "", self.tr("SVG (*.svg);;Images (*.png *.jpg *.jpeg *.bmp)")
         )
         if not path:
             return
 
-        shape = self._project.scene.shape
         if path.lower().endswith(".svg"):
             try:
                 from lithoshape3d.ui.shape_svg_import import rasterize_svg_to_alpha_png
@@ -1735,15 +1751,21 @@ class MainWindow(QMainWindow):
                 rasterized_path = rasterize_svg_to_alpha_png(path)
             except Exception as exc:
                 logger.exception("Echec de la rasterisation SVG")
-                QMessageBox.critical(self, "LithoShape3D", f"Impossible d'importer ce SVG :\n{exc}")
+                QMessageBox.critical(self, "LithoShape3D", self.tr("Impossible d'importer ce SVG :\n") + str(exc))
                 return
-            shape.shape_type = ShapeType.SVG
-            shape.source_image_path = rasterized_path
-            self._set_combo_data(self.shape_type_combo, ShapeType.SVG)
+            self._apply_image_shape_source(rasterized_path, shape_type=ShapeType.SVG)
         else:
-            shape.shape_type = ShapeType.IMAGE
-            shape.source_image_path = path
-            self._set_combo_data(self.shape_type_combo, ShapeType.IMAGE)
+            self._apply_image_shape_source(path, shape_type=ShapeType.IMAGE)
+
+    def _apply_image_shape_source(self, path: str, shape_type: ShapeType) -> None:
+        """Point d'entree commun pour faire d'une image/SVG deja sur disque
+        la Shape de la piece -- utilise par l'import manuel (Forme >
+        Importer SVG/image...) et par le raccourci "Utiliser le detourage
+        comme forme..."."""
+        shape = self._project.scene.shape
+        shape.shape_type = shape_type
+        shape.source_image_path = path
+        self._set_combo_data(self.shape_type_combo, shape_type)
 
         self._update_shape_source_label()
         self._update_shape_visibility()
@@ -1912,6 +1934,7 @@ class MainWindow(QMainWindow):
             self._update_source_preview()
 
     def _on_remove_background_manual_clicked(self) -> None:
+        self._detour_target = "export"
         if not self._image_path or self._segmentation_backend is None:
             return
 
@@ -1935,6 +1958,14 @@ class MainWindow(QMainWindow):
         self._export_detoured_image(color_image, alpha_mask)
 
     def _on_remove_background_auto_clicked(self) -> None:
+        self._detour_target = "export"
+        self._start_auto_background_removal()
+
+    def _on_remove_background_as_shape_clicked(self) -> None:
+        self._detour_target = "shape"
+        self._start_auto_background_removal()
+
+    def _start_auto_background_removal(self) -> None:
         if not self._image_path:
             return
 
@@ -1963,7 +1994,8 @@ class MainWindow(QMainWindow):
             return
 
         self.remove_background_button.setEnabled(False)
-        self.statusBar().showMessage("Telechargement du modele de detourage en cours...")
+        self.remove_background_as_shape_button.setEnabled(False)
+        self.statusBar().showMessage(self.tr("Telechargement du modele de detourage en cours..."))
         worker = DownloadAutoBackgroundModelWorker()
         worker.signals.finished.connect(self._on_auto_background_model_downloaded)
         worker.signals.failed.connect(self._on_auto_background_failed)
@@ -1971,7 +2003,8 @@ class MainWindow(QMainWindow):
 
     def _on_auto_background_model_downloaded(self) -> None:
         self.remove_background_button.setEnabled(True)
-        self.statusBar().showMessage("Modele installe.", 3000)
+        self.remove_background_as_shape_button.setEnabled(True)
+        self.statusBar().showMessage(self.tr("Modele installe."), 3000)
         self._run_auto_background_removal()
 
     def _run_auto_background_removal(self) -> None:
@@ -1980,7 +2013,8 @@ class MainWindow(QMainWindow):
         color_image = load_image(self._image_path).convert("RGB")
         self._auto_background_color_image = color_image
         self.remove_background_button.setEnabled(False)
-        self.statusBar().showMessage("Detourage en cours...")
+        self.remove_background_as_shape_button.setEnabled(False)
+        self.statusBar().showMessage(self.tr("Detourage en cours..."))
         worker = AutoBackgroundRemovalWorker(color_image)
         worker.signals.mask_ready.connect(self._on_auto_background_mask_ready)
         worker.signals.failed.connect(self._on_auto_background_failed)
@@ -1988,11 +2022,13 @@ class MainWindow(QMainWindow):
 
     def _on_auto_background_mask_ready(self, mask: np.ndarray) -> None:
         self.remove_background_button.setEnabled(True)
-        self.statusBar().showMessage("Detourage termine.", 3000)
+        self.remove_background_as_shape_button.setEnabled(True)
+        self.statusBar().showMessage(self.tr("Detourage termine."), 3000)
         self._export_detoured_image(self._auto_background_color_image, mask)
 
     def _on_auto_background_failed(self, message: str) -> None:
         self.remove_background_button.setEnabled(True)
+        self.remove_background_as_shape_button.setEnabled(True)
         logger.error("Detourage automatique : %s", message)
         self.statusBar().clearMessage()
         QMessageBox.warning(
@@ -2007,14 +2043,37 @@ class MainWindow(QMainWindow):
         alpha = np.clip(alpha_mask * 255.0, 0, 255).astype(np.uint8)
         rgba = np.dstack([rgb, alpha])
 
+        if self._detour_target == "shape":
+            self._use_detoured_image_as_shape(rgba)
+            return
+
         suggested_name = f"{Path(self._image_path).stem}-detoure.png"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Exporter l'image detouree", suggested_name, "PNG (*.png)"
+            self, self.tr("Exporter l'image detouree"), suggested_name, self.tr("PNG (*.png)")
         )
         if not path:
             return
         Image.fromarray(rgba, "RGBA").save(path, "PNG")
         self.statusBar().showMessage(f"Image detouree exportee : {Path(path).name}", 5000)
+
+    def _use_detoured_image_as_shape(self, rgba: np.ndarray) -> None:
+        """Raccourci : ecrit le detourage dans un fichier a cote de la
+        photo source (pas de boite de dialogue -- c'est le point de tout ce
+        raccourci) puis l'applique directement comme Forme=Image, cf.
+        `_apply_image_shape_source`. La piece est alors decoupee a la
+        silhouette du sujet, sans le fond."""
+        suggested_path = Path(self._image_path).with_name(f"{Path(self._image_path).stem}-detoure.png")
+        path = str(suggested_path)
+        try:
+            Image.fromarray(rgba, "RGBA").save(path, "PNG")
+        except OSError as exc:
+            logger.exception("Echec de l'ecriture du detourage")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'export :\n") + str(exc))
+            return
+        self._apply_image_shape_source(path, shape_type=ShapeType.IMAGE)
+        self.statusBar().showMessage(
+            self.tr("Piece decoupee a la silhouette du detourage : {}").format(Path(path).name), 6000
+        )
 
     # ------------------------------------------------------------------ #
     # Parametres / presets
@@ -2129,7 +2188,7 @@ class MainWindow(QMainWindow):
         self._set_state(AppState.MESH_READY)
         self._report_printability(fused_white_mesh)
         if result.warnings:
-            self.statusBar().showMessage("Backlight Insert -- " + " ".join(result.warnings), 10000)
+            self.statusBar().showMessage(self.tr("Backlight Insert -- ") + " ".join(result.warnings), 10000)
 
     def _on_composition_succeeded(self, mesh, panel_z_max: float) -> None:
         self._current_mesh = mesh
@@ -2166,7 +2225,7 @@ class MainWindow(QMainWindow):
         self._current_material_meshes = None
         self._current_backlight_result = None
         self._set_state(AppState.ERROR)
-        QMessageBox.warning(self, "LithoShape3D", f"La generation a echoue :\n{message}")
+        QMessageBox.warning(self, "LithoShape3D", self.tr("La generation a echoue :\n") + message)
 
     def _on_display_mode_changed(self) -> None:
         if self._current_mesh is not None:
@@ -2377,7 +2436,7 @@ class MainWindow(QMainWindow):
             return
 
         suggested_name = self._suggested_stl_filename()
-        path, _ = QFileDialog.getSaveFileName(self, "Exporter en STL", suggested_name, "STL (*.stl)")
+        path, _ = QFileDialog.getSaveFileName(self, self.tr("Exporter en STL"), suggested_name, self.tr("STL (*.stl)"))
         if not path:
             return
 
@@ -2386,12 +2445,12 @@ class MainWindow(QMainWindow):
             export_stl(oriented, path)
         except OSError as exc:
             logger.exception("Echec de l'export STL")
-            QMessageBox.critical(self, "LithoShape3D", f"Echec de l'export :\n{exc}")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'export :\n") + str(exc))
             return
 
         logger.info("STL exporte : %s", path)
         self.statusBar().showMessage(f"Export reussi : {path}", 8000)
-        QMessageBox.information(self, "LithoShape3D", f"STL exporte avec succes :\n{path}")
+        QMessageBox.information(self, "LithoShape3D", self.tr("STL exporte avec succes :\n") + str(path))
 
     def _on_export_backlight_stl_clicked(self) -> None:
         """Malgre son nom (garde du chemin Backlight Insert d'origine), ce
@@ -2404,7 +2463,7 @@ class MainWindow(QMainWindow):
             {name: mesh for name, (mesh, _color) in materials.items()}
         )
         base_name = self._slugify(self._project.name)
-        directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL (un fichier par corps)")
+        directory = QFileDialog.getExistingDirectory(self, self.tr("Dossier pour les STL (un fichier par corps)"))
         if not directory:
             return
 
@@ -2412,13 +2471,13 @@ class MainWindow(QMainWindow):
             written = export_stl_per_material(material_meshes, directory, base_name=base_name)
         except OSError as exc:
             logger.exception("Echec de l'export STL multi-corps")
-            QMessageBox.critical(self, "LithoShape3D", f"Echec de l'export :\n{exc}")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'export :\n") + str(exc))
             return
 
         names = "\n".join(str(p) for p in written)
         logger.info("STL multi-corps exportes : %s", names)
         self.statusBar().showMessage(f"Export reussi : {directory}", 8000)
-        QMessageBox.information(self, "LithoShape3D", f"STL exportes avec succes :\n{names}")
+        QMessageBox.information(self, "LithoShape3D", self.tr("STL exportes avec succes :\n") + names)
 
     def _on_export_multi_material_clicked(self) -> None:
         """3MF standard multi-objets en priorite (voir
@@ -2435,14 +2494,14 @@ class MainWindow(QMainWindow):
         )
         if len(material_meshes) <= 1:
             QMessageBox.information(
-                self, "LithoShape3D", "Un seul materiau utilise : l'export STL standard suffit."
+                self, "LithoShape3D", self.tr("Un seul materiau utilise : l'export STL standard suffit.")
             )
             return
 
         base_name = self._slugify(self._project.name)
         suggested_name = f"{base_name}.3mf"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Exporter multi-materiaux (3MF)", suggested_name, "3MF (*.3mf)"
+            self, self.tr("Exporter multi-materiaux (3MF)"), suggested_name, self.tr("3MF (*.3mf)")
         )
         if not path:
             return
@@ -2451,7 +2510,7 @@ class MainWindow(QMainWindow):
             export_multi_material_3mf(material_meshes, path)
         except Exception as exc:  # noqa: BLE001 -- n'importe quel echec du 3MF doit declencher le repli STL
             logger.warning("Export 3MF multi-objets echoue, repli sur STL par materiau : %s", exc)
-            directory = QFileDialog.getExistingDirectory(self, "Dossier pour les STL par materiau")
+            directory = QFileDialog.getExistingDirectory(self, self.tr("Dossier pour les STL par materiau"))
             if not directory:
                 return
             written = export_stl_per_material(material_meshes, directory, base_name=base_name)
@@ -2459,13 +2518,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "LithoShape3D",
-                f"Export 3MF indisponible ({exc}), repli sur un STL par materiau :\n{names}",
+                self.tr("Export 3MF indisponible ({}), repli sur un STL par materiau :\n{}").format(exc, names),
             )
             return
 
         logger.info("3MF multi-objets exporte : %s", path)
         self.statusBar().showMessage(f"Export multi-materiaux reussi : {path}", 8000)
-        QMessageBox.information(self, "LithoShape3D", f"3MF multi-objets exporte avec succes :\n{path}")
+        QMessageBox.information(self, "LithoShape3D", self.tr("3MF multi-objets exporte avec succes :\n") + str(path))
 
     # ------------------------------------------------------------------ #
     # Projet
@@ -2487,7 +2546,7 @@ class MainWindow(QMainWindow):
         self._set_state(AppState.NO_IMAGE)
 
     def _on_open_project(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Ouvrir un projet LithoShape3D")
+        directory = QFileDialog.getExistingDirectory(self, self.tr("Ouvrir un projet LithoShape3D"))
         if not directory:
             return
 
@@ -2495,7 +2554,7 @@ class MainWindow(QMainWindow):
             project = load_project_bundle(directory)
         except (OSError, ValueError, KeyError) as exc:
             logger.exception("Impossible d'ouvrir le projet")
-            QMessageBox.critical(self, "LithoShape3D", f"Impossible d'ouvrir le projet :\n{exc}")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Impossible d'ouvrir le projet :\n") + str(exc))
             return
 
         self._project = project
@@ -2527,7 +2586,7 @@ class MainWindow(QMainWindow):
 
     def _on_save_project_as(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Enregistrer le projet", "MonProjet.l3dproj", "Projet LithoShape3D (*.l3dproj)"
+            self, self.tr("Enregistrer le projet"), "MonProjet.l3dproj", self.tr("Projet LithoShape3D (*.l3dproj)")
         )
         if not path:
             return
@@ -2538,7 +2597,7 @@ class MainWindow(QMainWindow):
             save_project_bundle(self._project, bundle_dir, dirty_masks=self._zone_masks)
         except OSError as exc:
             logger.exception("Echec de l'enregistrement du projet")
-            QMessageBox.critical(self, "LithoShape3D", f"Echec de l'enregistrement :\n{exc}")
+            QMessageBox.critical(self, "LithoShape3D", self.tr("Echec de l'enregistrement :\n") + str(exc))
             return
 
         self._project_bundle_dir = Path(bundle_dir)
@@ -2572,13 +2631,13 @@ class MainWindow(QMainWindow):
     def _build_theme_menu(self) -> None:
         from lithoshape3d.ui.theme import stored_theme_is_dark
 
-        theme_menu = self.menuBar().addMenu("Theme")
+        theme_menu = self.menuBar().addMenu(self.tr("Theme"))
         group = QActionGroup(self)
         group.setExclusive(True)
 
-        dark_action = QAction("Sombre (Carbon Glow)", self)
+        dark_action = QAction(self.tr("Sombre (Carbon Glow)"), self)
         dark_action.setCheckable(True)
-        light_action = QAction("Clair (Litho Lab)", self)
+        light_action = QAction(self.tr("Clair (Litho Lab)"), self)
         light_action.setCheckable(True)
 
         is_dark = stored_theme_is_dark()
@@ -2592,6 +2651,32 @@ class MainWindow(QMainWindow):
         group.addAction(light_action)
         theme_menu.addAction(dark_action)
         theme_menu.addAction(light_action)
+
+    def _build_language_menu(self) -> None:
+        from lithoshape3d.ui.i18n import SUPPORTED_LANGUAGES, stored_language
+
+        language_menu = self.menuBar().addMenu(self.tr("Langue"))
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        current = stored_language()
+        for code, label in SUPPORTED_LANGUAGES.items():
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(code == current)
+            action.triggered.connect(lambda checked=False, code=code: self._on_language_action_toggled(code))
+            group.addAction(action)
+            language_menu.addAction(action)
+
+    def _on_language_action_toggled(self, code: str) -> None:
+        from lithoshape3d.ui.i18n import set_stored_language
+
+        set_stored_language(code)
+        QMessageBox.information(
+            self,
+            "LithoShape3D",
+            self.tr("Redemarrez LithoShape3D pour appliquer le changement de langue."),
+        )
 
     def _on_theme_action_toggled(self, dark: bool) -> None:
         from PySide6.QtWidgets import QApplication
@@ -2619,9 +2704,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "LithoShape3D",
-            "L'export STL/3MF necessite une licence valide.\n\n"
-            "Vous pouvez continuer a explorer et previsualiser vos projets "
-            "librement -- seul l'export est reserve aux licences achetees.",
+            self.tr(
+                "L'export STL/3MF necessite une licence valide.\n\n"
+                "Vous pouvez continuer a explorer et previsualiser vos projets "
+                "librement -- seul l'export est reserve aux licences achetees."
+            ),
         )
         self._open_license_dialog()
         return is_licensed()

@@ -41,20 +41,22 @@ class LicenseDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setWindowTitle("Licence LithoShape3D")
+        self.setWindowTitle(self.tr("Licence LithoShape3D"))
         self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                "Collez la cle de licence recue par email a l'achat.\n"
-                "L'export STL/3MF necessite une licence valide -- le reste du "
-                "logiciel (import, cadrage, apercu 3D) reste utilisable sans."
+                self.tr(
+                    "Collez la cle de licence recue par email a l'achat.\n"
+                    "L'export STL/3MF necessite une licence valide -- le reste du "
+                    "logiciel (import, cadrage, apercu 3D) reste utilisable sans."
+                )
             )
         )
 
         self.key_edit = QLineEdit(stored_license_key() or "")
-        self.key_edit.setPlaceholderText("payload.signature")
+        self.key_edit.setPlaceholderText(self.tr("payload.signature"))
         layout.addWidget(self.key_edit)
 
         self.status_label = QLabel()
@@ -70,16 +72,16 @@ class LicenseDialog(QDialog):
     def _refresh_status(self, key_str: str) -> None:
         key_str = key_str.strip()
         if not key_str:
-            self.status_label.setText("Aucune cle saisie.")
+            self.status_label.setText(self.tr("Aucune cle saisie."))
             return
         try:
             info = verify_license_key(key_str)
         except InvalidLicenseError:
-            self.status_label.setText("Cle invalide.")
+            self.status_label.setText(self.tr("Cle invalide."))
             self.status_label.setObjectName("licenseStatusInvalid")
             self.status_label.setStyleSheet("color: #b5790f; font-weight: 600;")
             return
-        self.status_label.setText(f"Licence valide -- {info.email}")
+        self.status_label.setText(self.tr("Licence valide -- {}").format(info.email))
         self.status_label.setStyleSheet("color: #157C89; font-weight: 600;")
 
     def _on_save(self) -> None:
@@ -88,7 +90,7 @@ class LicenseDialog(QDialog):
             try:
                 verify_license_key(key_str)
             except InvalidLicenseError:
-                QMessageBox.warning(self, "LithoShape3D", "Cette cle de licence n'est pas valide.")
+                QMessageBox.warning(self, "LithoShape3D", self.tr("Cette cle de licence n'est pas valide."))
                 return
         settings = QSettings()
         settings.setValue(SETTINGS_KEY_LICENSE, key_str)
