@@ -35,6 +35,9 @@ la roadmap et les décisions techniques, voir `docs/` :
 - [`docs/versions/CURRENT_STATE.md`](docs/versions/CURRENT_STATE.md) —
   état réel à jour (version, tests, plateformes testées, statut de chaque
   fonction). Point d'entrée pour reprendre le projet.
+- [`docs/MANUAL_FR.md`](docs/MANUAL_FR.md) / [`docs/MANUAL_EN.md`](docs/MANUAL_EN.md) —
+  manuel utilisateur complet (toutes les fonctionnalités, expliquées
+  simplement), en français et en anglais.
 - [`docs/00_PRODUCT_BIBLE.md`](docs/00_PRODUCT_BIBLE.md) — vision produit.
 - [`docs/01_ROADMAP.md`](docs/01_ROADMAP.md) — trajectoire vers la 1.0.
 - [`docs/07_ARCHITECTURE.md`](docs/07_ARCHITECTURE.md) — architecture
