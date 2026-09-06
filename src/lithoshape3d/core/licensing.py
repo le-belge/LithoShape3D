@@ -19,14 +19,23 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 # Cle PUBLIQUE seulement -- generee par scripts/generate_license_keypair.py.
 # La cle privee correspondante ne doit JAMAIS apparaitre dans ce depot.
 PUBLIC_KEY_HEX = "0bfb928984d7883fb234a5f098c4c9a35403880ecf67a172d168f8b6736cf3da"
+
+# Emplacement local (jamais dans ce depot) ou le vendeur garde sa cle privee
+# -- voir scripts/issue_license.py. Sa seule PRESENCE sur une machine (la
+# sienne, jamais celle d'un client qui recoit l'app packagee sans ce fichier)
+# sert aussi de garde pour reveler le bouton "Generer une licence..." dans
+# l'app -- voir ui/main_window.py::_maybe_add_seller_menu.
+SELLER_KEY_PATH = Path.home() / ".lithoshape3d" / "seller_private_key.hex"
 
 
 class InvalidLicenseError(ValueError):
@@ -88,3 +97,22 @@ def is_valid_license_key(key_str: str, public_key_hex: str | None = None) -> boo
         return True
     except InvalidLicenseError:
         return False
+
+
+def issue_license_key(email: str, private_key_hex: str) -> str:
+    """Emet une cle de licence signee pour `email`. Reserve au vendeur --
+    ne jamais appeler avec une cle qui n'est pas la cle privee du vendeur.
+    Partagee par scripts/issue_license.py et le bouton vendeur de l'app."""
+    private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
+    payload = {"id": str(uuid.uuid4()), "email": email}
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature_bytes = private_key.sign(payload_bytes)
+    return f"{_b64url_encode(payload_bytes)}.{_b64url_encode(signature_bytes)}"
+
+
+def seller_private_key_hex() -> str | None:
+    """Cle privee du vendeur si ce fichier local existe, sinon None -- ne
+    lit jamais rien depuis ce depot ni depuis l'app packagee elle-meme."""
+    if SELLER_KEY_PATH.exists():
+        return SELLER_KEY_PATH.read_text().strip()
+    return None

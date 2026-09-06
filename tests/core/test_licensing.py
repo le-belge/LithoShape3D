@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from lithoshape3d.core.licensing import (
     InvalidLicenseError,
     is_valid_license_key,
+    issue_license_key,
+    seller_private_key_hex,
     verify_license_key,
 )
 
@@ -87,3 +89,33 @@ def test_missing_fields_in_payload_are_rejected(keypair):
 
     with pytest.raises(InvalidLicenseError):
         verify_license_key(key, public_key_hex=public_hex)
+
+
+def test_issue_license_key_round_trips_through_verify(keypair):
+    private_key, public_hex = keypair
+    from cryptography.hazmat.primitives import serialization
+
+    private_hex = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).hex()
+
+    key = issue_license_key("client@example.com", private_hex)
+    info = verify_license_key(key, public_key_hex=public_hex)
+
+    assert info.email == "client@example.com"
+
+
+def test_seller_private_key_hex_reads_the_local_file(tmp_path, monkeypatch):
+    key_path = tmp_path / "seller_private_key.hex"
+    key_path.write_text("  abcdef  \n")
+    monkeypatch.setattr("lithoshape3d.core.licensing.SELLER_KEY_PATH", key_path)
+
+    assert seller_private_key_hex() == "abcdef"
+
+
+def test_seller_private_key_hex_is_none_when_file_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr("lithoshape3d.core.licensing.SELLER_KEY_PATH", tmp_path / "does_not_exist.hex")
+
+    assert seller_private_key_hex() is None

@@ -968,6 +968,27 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+        self._maybe_add_seller_menu()
+
+    def _maybe_add_seller_menu(self) -> None:
+        """N'ajoute ce menu que si la cle privee vendeur existe localement
+        (voir core/licensing.py::SELLER_KEY_PATH) -- absente de l'app
+        packagee livree a un client, ce menu n'apparait donc jamais chez
+        eux, uniquement sur la machine du vendeur."""
+        from lithoshape3d.core.licensing import seller_private_key_hex
+
+        if not seller_private_key_hex():
+            return
+        seller_menu = self.menuBar().addMenu("Vendeur")
+        issue_license_action = QAction("Generer une licence...", self)
+        issue_license_action.triggered.connect(self._open_issue_license_dialog)
+        seller_menu.addAction(issue_license_action)
+
+    def _open_issue_license_dialog(self) -> None:
+        from lithoshape3d.ui.issue_license_dialog import IssueLicenseDialog
+
+        IssueLicenseDialog(self).exec()
+
     # ------------------------------------------------------------------ #
     # Reperes de parcours (retour terrain : rendre visible et permanent
     # l'enchainement Image -> Zones -> Geometrie/Backlight -> Apercu ->

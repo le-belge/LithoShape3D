@@ -5,7 +5,10 @@ Usage courant, apres une configuration unique (voir plus bas) :
     python scripts/issue_license.py client@example.com
 
 Affiche la cle de licence a copier/coller dans un email de confirmation
-d'achat -- l'app la verifie hors-ligne via `core/licensing.py`.
+d'achat -- l'app la verifie hors-ligne via `core/licensing.py`. Le meme
+bouton existe directement dans l'app (menu Vendeur, visible uniquement si
+la cle privee locale existe) -- ce script est l'equivalent en ligne de
+commande.
 
 Configuration unique de la cle privee (jamais lue depuis le depot git) --
 deux options, la premiere suffit pour un usage local normal :
@@ -23,37 +26,17 @@ deux options, la premiere suffit pour un usage local normal :
 from __future__ import annotations
 
 import argparse
-import base64
-import json
 import os
 import sys
-import uuid
-from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-SELLER_KEY_PATH = Path.home() / ".lithoshape3d" / "seller_private_key.hex"
-
-
-def _b64url_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def issue_license(email: str, private_key_hex: str) -> str:
-    private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
-    payload = {"id": str(uuid.uuid4()), "email": email}
-    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    signature_bytes = private_key.sign(payload_bytes)
-    return f"{_b64url_encode(payload_bytes)}.{_b64url_encode(signature_bytes)}"
+from lithoshape3d.core.licensing import SELLER_KEY_PATH, issue_license_key, seller_private_key_hex
 
 
 def _load_private_key_hex() -> str | None:
     env_value = os.environ.get("LITHOSHAPE3D_PRIVATE_KEY_HEX")
     if env_value:
         return env_value.strip()
-    if SELLER_KEY_PATH.exists():
-        return SELLER_KEY_PATH.read_text().strip()
-    return None
+    return seller_private_key_hex()
 
 
 def main() -> None:
@@ -73,7 +56,7 @@ def main() -> None:
         )
         raise SystemExit(1)
 
-    print(issue_license(args.email, private_key_hex))
+    print(issue_license_key(args.email, private_key_hex))
 
 
 if __name__ == "__main__":
