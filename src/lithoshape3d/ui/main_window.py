@@ -961,6 +961,9 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(lightbox_image_action)
 
         help_menu = self.menuBar().addMenu("Aide")
+        license_action = QAction("Licence...", self)
+        license_action.triggered.connect(self._open_license_dialog)
+        help_menu.addAction(license_action)
         about_action = QAction("A propos", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
@@ -2337,6 +2340,8 @@ class MainWindow(QMainWindow):
     def _on_export_clicked(self) -> None:
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
             return
+        if not self._ensure_licensed_for_export():
+            return
 
         if self._current_backlight_result is not None or self._project.scene.support.side_stabilizers:
             # Un seul fichier STL ne suffit pas ici : soit le corps blanc et
@@ -2396,6 +2401,8 @@ class MainWindow(QMainWindow):
         core/export/multi_material_export.py) ; repli propre sur un STL par
         materiau, tous alignes dans le meme repere, si le 3MF echoue."""
         if self._state is not AppState.MESH_READY or self._current_mesh is None:
+            return
+        if not self._ensure_licensed_for_export():
             return
 
         materials = self._materials_for_display()
@@ -2537,3 +2544,27 @@ class MainWindow(QMainWindow):
 
         dialog = AboutDialog(self)
         dialog.exec()
+
+    def _open_license_dialog(self) -> None:
+        from lithoshape3d.ui.license_dialog import LicenseDialog
+
+        LicenseDialog(self).exec()
+
+    def _ensure_licensed_for_export(self) -> bool:
+        """Point de verification unique avant tout export STL/3MF -- le
+        reste du logiciel (import, cadrage, apercu 3D) reste utilisable
+        sans licence. Voir core/licensing.py pour le choix (delibere,
+        simple, hors-ligne) de ce modele."""
+        from lithoshape3d.ui.license_dialog import is_licensed
+
+        if is_licensed():
+            return True
+        QMessageBox.information(
+            self,
+            "LithoShape3D",
+            "L'export STL/3MF necessite une licence valide.\n\n"
+            "Vous pouvez continuer a explorer et previsualiser vos projets "
+            "librement -- seul l'export est reserve aux licences achetees.",
+        )
+        self._open_license_dialog()
+        return is_licensed()

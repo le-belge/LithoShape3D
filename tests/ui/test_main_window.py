@@ -677,3 +677,55 @@ def test_loading_an_image_resyncs_height_on_every_zone_not_just_the_active_one(
     assert other_zone.geometry_params.height_mm == pytest.approx(
         height_mm_from_aspect_ratio(other_zone.geometry_params.width_mm, 700, 520), abs=1e-6
     )
+
+
+def _generate_ready_mesh(main_window):
+    from lithoshape3d.core.geometry.heightmap import heightmap_from_image_path
+    from lithoshape3d.core.geometry.mesh_builder import build_slab_mesh
+
+    params = main_window._current_geometry_parameters()
+    heightmap = heightmap_from_image_path(main_window._image_path, params)
+    mesh = build_slab_mesh(heightmap, mask=None, params=params)
+    main_window._on_generation_succeeded(mesh)
+
+
+def test_export_blocked_without_a_valid_license(main_window, tmp_path, monkeypatch):
+    """Reproduit le blocage reel : sans licence, `_on_export_clicked` doit
+    ouvrir la boite de dialogue de licence et ne jamais atteindre le
+    QFileDialog d'export -- voir `_ensure_licensed_for_export`."""
+    monkeypatch.setattr("lithoshape3d.ui.license_dialog.is_licensed", lambda: False)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    opened = []
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.MainWindow._open_license_dialog",
+        lambda self: opened.append(True),
+    )
+    save_dialog_called = []
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: save_dialog_called.append(True) or ("", ""),
+    )
+    _load(main_window, tmp_path)
+    _generate_ready_mesh(main_window)
+
+    main_window._on_export_clicked()
+
+    assert opened == [True]
+    assert not save_dialog_called
+
+
+def test_export_proceeds_once_licensed(main_window, tmp_path, monkeypatch):
+    monkeypatch.setattr("lithoshape3d.ui.license_dialog.is_licensed", lambda: True)
+    monkeypatch.setattr("lithoshape3d.ui.main_window.QMessageBox.information", lambda *a, **k: None)
+    _load(main_window, tmp_path)
+    _generate_ready_mesh(main_window)
+
+    output_path = tmp_path / "export_licensed.stl"
+    monkeypatch.setattr(
+        "lithoshape3d.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(output_path), "STL (*.stl)"),
+    )
+
+    main_window._on_export_clicked()
+
+    assert output_path.exists()

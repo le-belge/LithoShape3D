@@ -18,6 +18,8 @@ def run_app() -> int:
     logger.info("Lancement de LithoShape3D")
 
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setOrganizationName("LithoShape3D")
+    app.setApplicationName("LithoShape3D")
     app.setWindowIcon(application_icon())
     app.setApplicationDisplayName("LithoShape3D")
     apply_theme(app)

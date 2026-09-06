@@ -11,6 +11,17 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _licensed_by_default(monkeypatch):
+    """La quasi-totalite des tests UI existants exportent un STL sans se
+    soucier de licence -- ce n'est pas leur sujet. Seuls les tests dedies a
+    `core/licensing.py`/`license_dialog.py` (voir test_main_window.py et
+    test_license_dialog.py) desactivent ce defaut pour exercer le blocage
+    reel, sinon `_ensure_licensed_for_export` ouvrirait une vraie boite de
+    dialogue modale (`LicenseDialog.exec()`) qui bloque indefiniment."""
+    monkeypatch.setattr("lithoshape3d.ui.license_dialog.is_licensed", lambda: True)
+
+
 @pytest.fixture
 def main_window(qapp):
     """MainWindow avec un Plotter off-screen injecte : jamais de vraie
